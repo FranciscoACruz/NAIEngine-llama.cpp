@@ -1,0 +1,60 @@
+## ggml-org/gpt-oss-20b-GGUF
+
+Model: https://huggingface.co/ggml-org/gpt-oss-20b-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+
+## ggml-org/gpt-oss-120b-GGUF
+
+Model: https://huggingface.co/ggml-org/gpt-oss-120b-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+
+## ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF
+
+Model: https://huggingface.co/ggml-org/Qwen3-Coder-30B-A3B-Instruct-Q8_0-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+
+## ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF
+
+Model: https://huggingface.co/ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+
+## ggml-org/gemma-3-4b-it-qat-GGUF
+
+Model: https://huggingface.co/ggml-org/gemma-3-4b-it-qat-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+
+## ggml-org/GLM-4.7-Flash-GGUF
+
+Model: https://huggingface.co/ggml-org/GLM-4.7-Flash-GGUF
+
+- `llama-batched-bench`
+
+
+- `llama-bench`
+
+

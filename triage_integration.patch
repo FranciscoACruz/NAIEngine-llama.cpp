@@ -1,0 +1,116 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -10,6 +10,7 @@
+ #include "server-queue.h"
+ #include "server-schema.h"
+ #include "server-stream.h"
++#include "triage.h"
+ 
+ #include "build-info.h"
+ #include "common.h"
+@@ -150,6 +151,10 @@ struct server_slot {
+     // sampling state
+     common_sampler * sampler = nullptr;
+ 
++    // triage state
++    triage_context * triage_ctx = nullptr;
++    triage_result triage_res;
++
+     // metrics
+     int64_t t_start_process_prompt = 0;
+     int64_t t_start_generation     = 0;
+@@ -165,6 +170,13 @@ struct server_slot {
+     bool has_next_token = true;
+     bool is_processing  = false;
+
++    void reset_triage() {
++        if (triage_ctx) {
++            triage_reset(triage_ctx);
++        }
++        triage_res = triage_result{};
++    }
++
+     void reset() {
+         state = SLOT_STATE_IDLE;
+ 
+@@ -183,6 +195,8 @@ struct server_slot {
+             common_sampler_reset(sampler);
+         }
+
++        reset_triage();
++
+         task.reset();
+     }
+
+@@ -220,6 +234,8 @@ struct server_context_impl {
+     // batching context
+     server_batch batch_tgt;
+     server_batch batch_dft;
+
++    triage_config triage_cfg;
+
+     // state execution
+     bool is_running = false;
+@@ -227,6 +243,7 @@ struct server_context_impl {
+     server_context_impl(const common_params & params) : params(params), queue_tasks(params.n_junk), queue_results(params.n_junk) {
++        triage_cfg = triage_default_config();
+     }
+
+     ~server_context_impl() {
+@@ -242,6 +259,10 @@ struct server_context_impl {
+                 common_sampler_free(slot.sampler);
+                 slot.sampler = nullptr;
+             }
++            if (slot.triage_ctx) {
++                triage_free(slot.triage_ctx);
++                slot.triage_ctx = nullptr;
++            }
+         }
+         slots.clear();
+ 
+@@ -270,6 +291,7 @@ struct server_context_impl {
+             auto & slot = slots[i];
+             slot.id = i;
+             slot.ctx_tgt = ctx_tgt;
++            slot.triage_ctx = triage_init(&triage_cfg);
+             slot.reset();
+         }
+ 
+@@ -350,6 +372,21 @@ struct server_context_impl {
+         slot.n_prompt_tokens = (int32_t)slot.prompt_tokens.size();
+         slot.n_remaining     = slot.task->params.n_predict;
+
++        // Evaluacion de Triage sobre Prompt
++        if (slot.triage_ctx) {
++            slot.triage_res = triage_evaluate_prompt(
++                slot.triage_ctx, 
++                slot.prompt_tokens.data(), 
++                slot.prompt_tokens.size()
++            );
+
++            if (slot.triage_res.action == TRIAGE_ACTION_REJECT) {
++                LOG_WRN("%s: slot %d rechazado por triage: %s\n", __func__, slot.id, slot.triage_res.reason.c_str());
++                send_error(slot, "Peticion bloqueada por triage: " + slot.triage_res.reason);
++                slot.reset();
++                return;
++            }
++        }
+
+         slot.t_start_process_prompt = ggml_time_us();
+         slot.state = SLOT_STATE_PROCESSING_PROMPT;
+@@ -420,6 +457,15 @@ struct server_context_impl {
+         const llama_token id = common_sampler_sample(slot.sampler, ctx_tgt, -1);
+         common_sampler_accept(slot.sampler, id, true);
+
++        // Evaluacion de Triage sobre Token generado
++        if (slot.triage_ctx) {
++            bool allow = triage_evaluate_token(slot.triage_ctx, id);
++            if (!allow) {
++                slot.has_next_token = false;
++                slot.state = SLOT_STATE_IDLE;
++                return;
++            }
++        }
+
+         slot.generated_tokens.push_back(id);
+         std::string token_str = common_token_to_piece(ctx_tgt, id);
