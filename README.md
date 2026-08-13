@@ -58,11 +58,11 @@ El pipeline de ejecución de un token en la arquitectura NAI no sigue una torre 
              │    (Modelo de los 3 Cuerpos)    │     gravitatorio se colapsan
              └─────────────────────────────────┘     o atenúan por enfriamiento (dt)
 
-
+```
 
 
 ---
-
+---
 ## 🛠️ Desglose de los 3 Componentes Fundamentales
 
 ### A. Tronco de Capas Respirantes (Early Exit + Bypass Dinámico)
@@ -119,7 +119,7 @@ Para reflejar estos principios en la implementación C++ de tu repositorio, los 
 ---
 
 ---
-
+```
 ## 🔍 Detalle de Componentes Modificados
 
 ### 1. Motor de Triaje (TriageEngine)
@@ -127,7 +127,7 @@ Procesa el texto plano para redirigir el flujo sin consumir ciclos del modelo.
 
 - **Filtrado de Normalización:** Limpieza de signos de puntuación y diacríticos en UTF-8.
 - **Evaluador Semántico:** Clasificación de intención mediante listas de control exactas.
-
+```cpp
 Ejemplo de integración en el flujo principal:
 
     // Integración en el flujo principal
@@ -139,7 +139,7 @@ Ejemplo de integración en el flujo principal:
     } else if (res.flujo == FlujoTipo::PROPUESTA_HIPOTESIS) {
         // Activar sesgo de razonamiento extendido
     }
-
+```
 ---
 
 ### 2. Muestreo y Bypass de Autopista (sampling.cpp / sampling.h)
