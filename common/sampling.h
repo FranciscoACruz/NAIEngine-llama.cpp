@@ -3,11 +3,30 @@
 #include "llama.h"
 #include "common.h"
 
+#include <cstdint>      // [NAI] uint64_t para nai_stats_snapshot
 #include <string>
 #include <vector>
 #include <memory>
 
 struct common_sampler;
+
+// =================================================================
+// [NAI] TELEMETRÍA DE INERCIA
+// Histograma lock-free de decisiones de la autopista.
+// Llamar a common_sampler_nai_stats_dump() al final de la generación
+// para ver la distribución y calibrar delta_logit.
+// =================================================================
+struct nai_stats_snapshot {
+    uint64_t conflicto;  // cadena completa de samplers
+    uint64_t razon_1;    // único candidato
+    uint64_t razon_2;    // margen de logits
+    uint64_t razon_3;    // cola de probabilidad
+    uint64_t razon_4;    // dominancia de p1
+    uint64_t invalido;   // NaN/Inf detectado
+};
+
+nai_stats_snapshot common_sampler_get_nai_stats();
+void              common_sampler_nai_stats_dump();
 
 // =================================================================
 // LLAMA SAMPLER API

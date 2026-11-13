@@ -6,7 +6,9 @@
 #include "ggml.h"
 
 #include <algorithm>
+#include <atomic>          // [NAI-FIX] telemetría lock-free
 #include <cctype>
+#include <cinttypes>       // [NAI-FIX] PRIu64 para telemetría
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -15,36 +17,151 @@
 #include <vector>
 
 // =================================================================
+// [NAI-FIX 5] Telemetría atómica: histograma de decisiones.
+//   índice 0      → nodo de conflicto (sin autopista)
+//   índice 1..4   → autopista activada por código de razón
+//   índice 5      → logits inválidos (NaN/Inf, early return)
+// =================================================================
+static std::atomic<uint64_t> g_nai_stats[6] = {};
+
+static inline void nai_bump_stat(uint8_t codigo) {
+    // codigo 0..4 → slot 0..4; codigo 255 → slot 5
+    const uint8_t slot = (codigo <= 4) ? codigo : 5;
+    g_nai_stats[slot].fetch_add(1, std::memory_order_relaxed);
+}
+
+// =================================================================
 // 1. ESTRUCTURA NUMÉRICA Y EVALUADOR DE INERCIA (100% Determinista)
 // =================================================================
 struct DecisionInercia {
     bool    es_autopista; // true (1): Vía rápida | false (0): Requiere Samplers
-    uint8_t codigo_razon; // Código numérico fijo: 1, 2, 3, 4 o 0
+    uint8_t codigo_razon; // 1: único | 2: margen logits | 3: cola p | 4: dominancia p | 0: conflicto | 255: inválido
     float   margen;       // Métrica física calculada
+    float   entropia;     // [NAI-FIX 3] entropía Shannon del top-k
+    float   delta_h;      // [NAI-FIX 2] margen crudo de logits (para telemetría)
 };
 
+// [NAI-FIX 1] Guard NaN/Inf  |  [NAI-FIX 2] Umbral adaptativo por temp
+// [NAI-FIX 3] Entropía Shannon top-k (proxy de conflicto real)
 static DecisionInercia evaluar_inercia_y_equivalencia(
-    const llama_token_data_array & cur_p, 
-    float epsilon_p = 0.02f,
-    float delta_logit = 2.2f
+    const llama_token_data_array & cur_p,
+    float temperatura       = 1.0f,
+    float epsilon_p         = 0.02f,
+    float delta_logit       = 2.2f,
+    int   top_k_entropy     = 10
 ) {
-    if (cur_p.size <= 1) return { true, 1, 1.0f };
+    // Caso trivial: un único candidato
+    if (cur_p.size <= 1) {
+        return { true, 1, 1.0f, 0.0f, 0.0f };
+    }
 
-    float l1 = cur_p.data[0].logit, l2 = cur_p.data[1].logit;
-    float margen_logits = l1 - l2;
-    if (margen_logits > delta_logit) return { true, 2, margen_logits };
+    const float l1 = cur_p.data[0].logit;
+    const float l2 = cur_p.data[1].logit;
 
-    float p1 = cur_p.data[0].p, p2 = cur_p.data[1].p;
-    float margen_p = p1 - p2;
-    if (p1 > 0.0f && std::abs(margen_p) < epsilon_p) return { true, 3, margen_p };
+    // [NAI-FIX 1] Si los logits son NaN o Inf, no confiar en el modelo.
+    if (std::isnan(l1) || std::isnan(l2) || std::isinf(l1) || std::isinf(l2)) {
+        return { false, 255, 0.0f, 1.0f, 0.0f };
+    }
+
+    const float margen_logits = l1 - l2;
+
+    // [NAI-FIX 2] Umbral adaptativo: a mayor temperatura, la distribución
+    // se aplana y el margen crudo pierde significado. Exigimos más Δh.
+    const float temp_eff = std::max(0.1f, temperatura);
+    const float delta_logit_efectivo = delta_logit * temp_eff;
+
+    if (margen_logits > delta_logit_efectivo) {
+        return { true, 2, margen_logits, 0.0f, margen_logits };
+    }
+
+    const float p1 = cur_p.data[0].p;
+    const float p2 = cur_p.data[1].p;
+    const float margen_p = p1 - p2;
+
+    if (p1 > 0.0f && std::abs(margen_p) < epsilon_p) {
+        return { true, 3, margen_p, 0.0f, margen_logits };
+    }
 
     if (cur_p.size >= 5 && p1 > 0.0f) {
         float suma_cola = 0.0f;
         for (size_t i = 1; i < 5; ++i) suma_cola += cur_p.data[i].p;
-        if (p1 > 1.3f * suma_cola) return { true, 4, p1 - suma_cola };
+        if (p1 > 1.3f * suma_cola) {
+            return { true, 4, p1 - suma_cola, 0.0f, margen_logits };
+        }
     }
 
-    return { false, 0, margen_p };
+    // [NAI-FIX 3] Si ninguna heurística barata se cumple, calcular la
+    // entropía Shannon del top-k. Sirve para telemetría y calibración.
+    const int k = std::min<int>(top_k_entropy, static_cast<int>(cur_p.size));
+    float H = 0.0f;
+    bool tiene_p = false;
+    for (int i = 0; i < k; ++i) {
+        if (cur_p.data[i].p > 0.0f) { tiene_p = true; break; }
+    }
+    if (tiene_p) {
+        for (int i = 0; i < k; ++i) {
+            const float p = cur_p.data[i].p;
+            if (p > 0.0f) H -= p * std::log2(p);
+        }
+    } else {
+        // Aproximación softmax si el sampler no calculó probabilidades aún
+        float max_l = cur_p.data[0].logit;
+        float Z = 0.0f;
+        for (int i = 0; i < k; ++i) Z += std::exp(cur_p.data[i].logit - max_l);
+        if (Z > 0.0f) {
+            for (int i = 0; i < k; ++i) {
+                const float pi = std::exp(cur_p.data[i].logit - max_l) / Z;
+                if (pi > 0.0f) H -= pi * std::log2(pi);
+            }
+        }
+    }
+
+    return { false, 0, margen_p, H, margen_logits };
+}
+
+// =================================================================
+// [NAI-FIX 5] API de telemetría: histograma de decisiones.
+// =================================================================
+nai_stats_snapshot common_sampler_get_nai_stats() {
+    return {
+        g_nai_stats[0].load(std::memory_order_relaxed),
+        g_nai_stats[1].load(std::memory_order_relaxed),
+        g_nai_stats[2].load(std::memory_order_relaxed),
+        g_nai_stats[3].load(std::memory_order_relaxed),
+        g_nai_stats[4].load(std::memory_order_relaxed),
+        g_nai_stats[5].load(std::memory_order_relaxed),
+    };
+}
+
+void common_sampler_nai_stats_dump() {
+    const auto s = common_sampler_get_nai_stats();
+    const uint64_t total = s.conflicto + s.razon_1 + s.razon_2 + s.razon_3 + s.razon_4 + s.invalido;
+
+    if (total == 0) {
+        printf("[NAI] sin decisiones registradas aún\n");
+        return;
+    }
+
+    const auto pct = [total](uint64_t v) {
+        return 100.0 * static_cast<double>(v) / static_cast<double>(total);
+    };
+
+    printf("[NAI] total tokens muestreados = %" PRIu64 "\n", total);
+    printf("[NAI]   conflicto (cadena completa) = %6" PRIu64 "  (%.2f%%)\n", s.conflicto, pct(s.conflicto));
+    printf("[NAI]   razon 1 (único)              = %6" PRIu64 "  (%.2f%%)\n", s.razon_1, pct(s.razon_1));
+    printf("[NAI]   razon 2 (margen logits)     = %6" PRIu64 "  (%.2f%%)\n", s.razon_2, pct(s.razon_2));
+    printf("[NAI]   razon 3 (cola p)            = %6" PRIu64 "  (%.2f%%)\n", s.razon_3, pct(s.razon_3));
+    printf("[NAI]   razon 4 (dominancia p)      = %6" PRIu64 "  (%.2f%%)\n", s.razon_4, pct(s.razon_4));
+    printf("[NAI]   inválido (NaN/Inf)          = %6" PRIu64 "  (%.2f%%)\n", s.invalido, pct(s.invalido));
+
+    const double pct_autopista = pct(s.razon_1 + s.razon_2 + s.razon_3 + s.razon_4);
+    if (pct_autopista > 90.0) {
+        printf("[NAI] autopista activa >90%% — considera subir delta_logit (actual 2.2)\n");
+    } else if (pct_autopista < 10.0) {
+        printf("[NAI] autopista activa <10%% — considera bajar delta_logit (actual 2.2)\n");
+    } else {
+        printf("[NAI] autopista activa %.2f%% — calibración saludable\n", pct_autopista);
+    }
 }
 
 // Buffer circular optimizado para tokens históricos
@@ -135,12 +252,13 @@ struct common_sampler {
     common_time_meas tm() { return common_time_meas(t_total_us, params.no_perf); }
     mutable int64_t t_total_us = 0;
 };
+
 // =================================================================
 // 2. MUESTREO CON BYPASS DE AUTOPISTA (OPTIMIZACIÓN DE INERCIA)
 // =================================================================
 llama_token common_sampler_sample(struct common_sampler * gsm, struct llama_context * ctx, int idx, bool grammar_first) {
     const auto tm = gsm->tm();
-    
+
     if (!gsm->params.backend_sampling) {
         gsm->set_logits(ctx, idx);
     }
@@ -178,15 +296,24 @@ llama_token common_sampler_sample(struct common_sampler * gsm, struct llama_cont
     }
 
     // C. EVALUADOR ELÁSTICO DE INERCIA Y AUTOPISTA
-    std::sort(gsm->cur_p.data, gsm->cur_p.data + gsm->cur_p.size, [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
+    // [NAI-FIX 4] Tras el sort, marcar cur_p como ordenado para que
+    // las decisiones posteriores confíen en el invariante data[0] = top-1.
+    std::sort(gsm->cur_p.data, gsm->cur_p.data + gsm->cur_p.size,
+              [](const llama_token_data & a, const llama_token_data & b) {
+                  return a.logit > b.logit;
+              });
+    gsm->cur_p.sorted = true;
 
-    DecisionInercia dec = evaluar_inercia_y_equivalencia(gsm->cur_p);
+    // [NAI-FIX 2] Pasar temperatura al evaluador para umbral adaptativo.
+    DecisionInercia dec = evaluar_inercia_y_equivalencia(gsm->cur_p, gsm->params.temp);
+
+    // [NAI-FIX 5] Telemetría lock-free: 1 atomic add por token muestreado.
+    nai_bump_stat(dec.codigo_razon);
 
     if (dec.es_autopista) {
-        LOG_DBG("%s: [Inercia Autopista] Codigo: %d, Margen: %.4f -> Token direct: %d\n",
-                __func__, dec.codigo_razon, dec.margen, gsm->cur_p.data[0].id);
+        LOG_DBG("%s: [Inercia Autopista] Codigo: %u, Margen: %.4f, DeltaH: %.4f, H: %.3f -> Token direct: %d\n",
+                __func__, dec.codigo_razon, dec.margen, dec.delta_h, dec.entropia,
+                gsm->cur_p.data[0].id);
         return gsm->cur_p.data[0].id;
     }
 
@@ -204,6 +331,7 @@ llama_token common_sampler_sample(struct common_sampler * gsm, struct llama_cont
 
     return id;
 }
+
 std::string common_params_sampling::print() const {
     char result[1024];
     snprintf(result, sizeof(result),
@@ -442,6 +570,7 @@ void common_sampler_get_candidates(struct common_sampler * gsm, std::vector<llam
         std::sort(gsm->cur_p.data, gsm->cur_p.data + gsm->cur_p.size, [](const llama_token_data & a, const llama_token_data & b) {
             return a.logit > b.logit;
         });
+        gsm->cur_p.sorted = true;  // [NAI-FIX 4] consistencia de invariante
     }
     out.assign(gsm->cur_p.data, gsm->cur_p.data + gsm->cur_p.size);
 }
@@ -473,10 +602,10 @@ uint32_t common_sampler_get_seed(const struct common_sampler * gsm) {
 // SOBRECARGAS UNIFICADAS DE SAMPLE AND ACCEPT N (ÚNICAS Y SIN DUPLICADOS)
 // =================================================================
 std::vector<llama_token> common_sampler_sample_and_accept_n(
-        struct common_sampler * gsmpl, 
-        struct llama_context * ctx, 
-        const std::vector<int> & idxs, 
-        const llama_tokens & draft, 
+        struct common_sampler * gsmpl,
+        struct llama_context * ctx,
+        const std::vector<int> & idxs,
+        const llama_tokens & draft,
         bool grammar_first) {
     std::vector<llama_token> result;
     if (!gsmpl || idxs.empty()) return result;
@@ -494,9 +623,9 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
 }
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(
-        struct common_sampler * gsmpl, 
-        struct llama_context * ctx, 
-        const std::vector<int> & idxs, 
+        struct common_sampler * gsmpl,
+        struct llama_context * ctx,
+        const std::vector<int> & idxs,
         bool grammar_first) {
     return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, {}, grammar_first);
 }
