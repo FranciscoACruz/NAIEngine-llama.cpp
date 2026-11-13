@@ -307,15 +307,67 @@ ctest --output-on-failure -R nai
 
 ---
 
+---
+
+## 10. Marco Cuántico-Cosmológico y Dinámica de Dispersión en el Motor NAI
+
+Para trascender el cálculo secuencial convencional, NAI modela el flujo de tensores lingüísticos no como un simple paso de matrices estáticas, sino como un **sistema físico multiporta gobernado por dispersión, elasticidad termodinámica y expansión métrica del espacio de contexto**.
+
+---
+
+### 1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
+* **De qué trata en la física:** El coeficiente de restitución mide la conservación de la energía cinética en un choque entre cuerpos. Una colisión perfectamente elástica preserva toda la energía ($e = 1$), mientras que una inelástica disipa energía en forma de calor o deformación ($0 \le e < 1$).
+* **Cómo se aplica en NAI:** Conecta el estado latente inicial del token de entrada $h^{(0)}$ con su proyección final post-capas o post-salida temprana $h^{(final)}$. El coeficiente de elasticidad latente regula cuánta "energía informacional" se retiene:
+  $$h^{(final)} = \mathcal{T}_{\text{capas}}(h^{(0)}) \cdot e^{-\lambda \cdot \text{Disipación}}$$
+  Si la certidumbre es alta, el sistema actúa de forma cuasi-elástica mediante el bypass, evitando la fricción de las capas profundas.
+
+---
+
+### 2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
+* **De qué trata en la física:** En física de partículas y mecánica cuántica, la Matriz S (*Scattering Matrix*) relaciona el estado cuántico inicial de partículas libres antes de una colisión con el estado final después de interactuar mediante un potencial.
+* **Cómo se aplica en NAI:**
+  - **Dispersión Elástica ($\hat{S}_{\text{elástica}}$):** Se aplica en la Autopista de Muestreo. El tensor de logits rebota a través de los criterios de decisión (`DecisionInercia`) sin alterar la pureza semántica de la ruta óptima, conservando el momento informacional exacto.
+  - **Dispersión Inelástica ($\hat{S}_{\text{inelástica}}$):** Se activa en los **Nodos de Conflicto** (altas entropías). El estado colisiona contra las capas profundas (13..N), transformando y absorbiendo energía computacional para generar nuevas trayectorias semánticas complejas (ramificaciones de razonamiento).
+
+---
+
+### 3. Disipación de Energía Cinética en el Nodo Intermedio
+* **De qué trata en la física:** La pérdida de energía mecánica útil en sistemas disipativos debido a fricciones internas o turbulencias.
+* **Cómo se aplica en NAI:** Cuando el Triaje Latente o el Tronco de Capas detecta redundancia sintáctica, la energía cinética del gradiente se disipa deliberadamente en el nodo intermedio (Capa 12). Esto impide el desperdicio de ciclos de GPU en procesar tokens cuya inercia ya determinó el resultado.
+
+---
+
+### 4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
+* **De qué trata en la física:** Modela las trayectorias gravitacionales de múltiples cuerpos celestes interactuando simultáneamente en el espacio sin una solución analítica simple.
+* **Cómo se aplica en NAI:** Es el corazón del **Modelo Gravitatorio de Tres Cuerpos del KV Cache**. Cada token almacenado actúa como un cuerpo masivo que ejerce atracción o repulsión sobre los tensores circundantes, simulando una órbita de atención dinámica donde los tokens irrelevantes escapan del sistema gravitatorio central.
+
+---
+
+### 5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
+* **De qué trata en la física:** La Ley de Hubble describe cómo el universo se expande, provocando que los objetos distantes se alejen a una velocidad proporcional a su distancia, diluyendo la densidad de energía del cosmos.
+* **Cómo se aplica en NAI:** En los contextos masivos (>32k tokens), la distancia temporal y posicional entre los tokens genera una "expansión del espacio de contexto". NAI introduce un coeficiente de expansión cosmológica local análogo a la constante de Hubble ($H_0$), haciendo que los tokens más antiguos sufran una separación métrica y un enfriamiento proporcional a su lejanía respecto al foco atencional actual.
+
+---
+
+### 6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
+* **De qué trata en la física:** En relatividad general, el espacio y el tiempo no son una cuadrícula cartesiana rígida e invariable, sino una métrica flexible geométrica curvada por la masa y la energía.
+* **Cómo se aplica en NAI:** El "tiempo" de contexto no avanza como un simple contador lineal de tokens ($t = 1, 2, 3\dots$). El tiempo en NAI es **emergente y no cartesiano**: avanza más rápido en zonas de baja masa semántica (dilatación temporal del relleno) y se detiene o densifica en pozos gravitatorios profundos de alta relevancia (contracción de la atención).
+
+---
+
+### 7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
+* **De qué trata conceptualmente:** La síntesis absoluta de las leyes de campo, inercia, gravedad y disipación aplicadas a la cognición artificial.
+* **Formulación del Sistema Completo Unificado:**
+
+$$\mathcal{R}_{\mu\nu} - \frac{1}{2}g_{\mu\nu}\mathcal{R} + \Lambda_{\text{local}} g_{\mu\nu} = \frac{8\pi G}{c^4} \left( \hat{T}_{\text{semántica}}^{(i)} - \gamma \frac{\partial \Delta h}{\partial t} + \hat{S}_{\text{disipación}} \right)$$
+
+* **Interpretación Arquitectónica en NAI:**
+  1. El término métrico y la constante cosmológica local ($\Lambda_{\text{local}}$) regulan la expansión del KV Cache.
+  2. El tensor de energía-momento semántico ($\hat{T}_{\text{semántica}}$) representa la masa de los tokens interactuando mediante el modelo de tres cuerpos.
+  3. El término de inercia ($\frac{\partial \Delta h}{\partial t}$) controla la velocidad del *Early Exit* en el tronco respirante del motor.
 
 
-
-
-
-
-
-
-## 10. Consideraciones Técnicas y Advertencias de Uso
+## 11. Consideraciones Técnicas y Advertencias de Uso
 
 1. **Interacción con Gramáticas Estrictas:**
    - Si se activa el muestreo por gramática (`grammar_first = false`), la regla de autopista podría omitir la validación sintáctica en tokens dominantes. Para esquemas rígidos (JSON, YAML), se recomienda forzar estrictamente `grammar_first = true` o deshabilitar temporalmente el bypass de autopista.
