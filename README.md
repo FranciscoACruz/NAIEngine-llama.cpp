@@ -347,25 +347,24 @@ En lugar de almacenar ciegamente todo el historial, los tensores de clave y valo
 
 ---
 
-#### B. Formulación Matemática de la Matriz S y Dinámica de N-Cuerpos en el KV Cache
+### B. Formulación Matemática de la Matriz S y Dinámica de N-Cuerpos en el KV Cache
 
 Para formalizar la transición de estados y la interacción gravitacional en el espacio de atención de NAI, expresamos la evolución del estado orbital de los tokens mediante el operador de la **Matriz S de Dispersión Gravitacional ($\hat{S}_{\text{grav}}$)**:
 
-$$\left| \psi_{\text{salida}} \rangle = \hat{S}_{\text{grav}} \left( \sum_{j=1}^{N} \frac{G \cdot I_i \cdot I_j}{|\mathbf{r}_i - \mathbf{r}_j|^2} \right) \big| \psi_{\text{entrada}} \rangle$$
+$$\left| \psi_{\text{salida}} \right\rangle = \hat{S}_{\text{grav}} \left( \sum_{j=1}^{N} \frac{G \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^2} \right) \left| \psi_{\text{entrada}} \right\rangle$$
 
 Donde la fuerza de interacción gravitacional efectiva $\mathbf{F}_{ij}$ que experimenta el token $i$ respecto al token circundante $j$ en el espacio latente está dada por:
 
-$$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{(\mathbf{r}_i - \mathbf{r}_j)^3} (\mathbf{r}_i - \mathbf{r}_j) - \eta \cdot \mathbf{v}_i$$
+$$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^3} (\mathbf{r}_i - \mathbf{r}_j) - \eta \cdot \mathbf{v}_i$$
 
-* **Variables y Parámetros del Sistema:**
-  * **$G_{\text{efectivo}}$:** Constante de acoplamiento gravitacional del motor, que calibra la intensidad de la atracción semántica en el KV Cache.
-  * **$I_i, I_j$:** Masas semánticas intrínsecas de los tokens $i$ y $j$, calculadas a partir de su norma vectorial y su entropía local ($I_i = \|W_K x_i\|_2 \cdot [1 + \mathcal{H}_{\text{local}}(x_i)]$).
-  * **$\mathbf{r}_i, \mathbf{r}_j$:** Coordenadas vectoriales de los tokens dentro del espacio latente de atención.
-  * **$-\eta \cdot \mathbf{v}_i$:** Término de fricción dinámica o disipación orbital, responsable de amortiguar las oscilaciones erráticas y estabilizar las trayectorias de atención de largo plazo.
+- **Variables y Parámetros del Sistema:**
+  - **$G_{\text{efectivo}}$:** Constante de acoplamiento gravitacional del motor, que calibra la intensidad de la atracción semántica en el KV Cache.
+  - **$I_i, I_j$:** Masas semánticas intrínsecas de los tokens $i$ y $j$, calculadas a partir de su norma vectorial y su entropía local ($I_i = \|W_K x_i\|_2 \cdot [1 + \mathcal{H}_{\text{local}}(x_i)]$criptor).
+  - **$\mathbf{r}_i, \mathbf{r}_j$:** Coordenadas vectoriales de los tokens dentro del espacio latente de atención.
+  - **$-\eta \cdot \mathbf{v}_i$:** Término de fricción dinámica o disipación orbital, responsable de amortiguar las oscilaciones erráticas y estabilizar las trayectorias de atención de largo plazo.
 
-* **Comportamiento Arquitectónico:** 
+- **Comportamiento Arquitectónico:** 
   Mediante este formalismo de N-cuerpos, la Matriz S calcula la dispersión del campo de atención: los tokens que colisionan con trayectorias de baja masa semántica y alta velocidad relativa escapan del radio de Hill del sistema de atención, liberando memoria de la GPU de manera orgánica sin necesidad de truncamientos abruptos por ventanas deslizantes rígidas.
-
 ---
 
 ### 10.5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
@@ -450,6 +449,8 @@ $$\mathcal{R}_{\mu\nu} - \frac{1}{2}g_{\mu\nu}\mathcal{R} + \Lambda_{\text{local
 
 ## 11. Consideraciones Técnicas y Advertencias de Uso
 
+Las capacidades operativas del Motor NAI —en especial los umbrales de contexto masivo, el tamaño de lote (`n_batch`) y el rendimiento concurrente— no son estáticas; **dependen directamente de la infraestructura de hardware y del ancho de banda de memoria del equipo anfitrión** donde se ejecute la compilación:
+
 1. **Interacción con Gramáticas Estrictas:**
    - Si se activa el muestreo por gramática (`grammar_first = false`), la regla de autopista podría omitir la validación sintáctica en tokens dominantes. Para esquemas rígidos (JSON, YAML), se recomienda forzar estrictamente `grammar_first = true` o deshabilitar temporalmente el bypass de autopista.
 
@@ -458,6 +459,13 @@ $$\mathcal{R}_{\mu\nu} - \frac{1}{2}g_{\mu\nu}\mathcal{R} + \Lambda_{\text{local
 
 3. **Seguridad Multi-hilo (`Multi-threading`):**
    - La estructura global `nai::MapaMasaSemantica g_nai_mapa_masa` implementada en `llama-context.cpp` debe protegerse mediante cerrojos de exclusión mutua (*mutex/locks*) o ser instanciada por contexto de forma aislada en caso de ejecutar inferencia concurrente en múltiples instancias paralelas de `llama_context`.
+
+4. **Restricción de Memoria Unificada vs. VRAM Dedicada:**
+   - En equipos basados en arquitectura **Apple Silicon (M1/M2/M3/M4)** con memoria unificada, los límites de contexto masivo (>16k - 32k tokens) están condicionados por la asignación dinámica de memoria compartida del sistema operativo. Superar el límite estructural del búfer de lotes provocará la interrupción controlada del kernel por aserción (`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`), protegiendo el sistema de la saturación total.
+   - En estaciones de trabajo con **GPU dedicada (NVIDIA / AMD)** y VRAM discreta, el límite de concurrencia de usuarios simultáneos dependerá estrictamente del tamaño de la memoria gráfica disponible para alojar los tensores del KV Cache gravitatorio bajo la ecuación de expansión de Hubble.
+
+5. **Ajuste Dinámico de Lotes (`n_batch`):**
+   - Se recomienda calibrar el parámetro `n_batch` en función de los núcleos de procesamiento y el paralelismo de hilos del procesador host para evitar cuellos de botella durante el cálculo de la inercia latente y la matriz de dispersión.
 
 ---
 
