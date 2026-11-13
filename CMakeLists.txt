@@ -1,15 +1,12 @@
-cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.14...3.28)
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
-# Silenciar advertencia de conversión de 64 a 32 bits para compiladores Clang (Xcode / AppleClang)
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-shorten-64-to-32)
 endif()
 
-#set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
@@ -19,38 +16,27 @@ endif()
 
 message("CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 
-# Add path to modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
-
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
-
     include(git-vars)
-
-    # configure project version
-    # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
 
 option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
-
 option(LLAMA_WASM_MEM64 "llama: use 64-bit memory in WASM builds" ON)
 
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
-
-    # Use 64-bit memory to support backend_get_memory queries
-    # TODO: analyze performance impact, see https://spidermonkey.dev/blog/2025/01/15/is-memory64-actually-worth-using
     if (LLAMA_WASM_MEM64)
       add_compile_options("-sMEMORY64=1")
       add_link_options("-sMEMORY64=1")
     endif()
     add_link_options("-sALLOW_MEMORY_GROWTH=1")
-
     option(LLAMA_WASM_SINGLE_FILE "llama: embed WASM inside the generated llama.js" OFF)
     option(LLAMA_BUILD_HTML "llama: build HTML file" ON)
     if (LLAMA_BUILD_HTML)
@@ -78,7 +64,6 @@ if (MSVC)
 endif()
 
 if (LLAMA_STANDALONE)
-    # enable parallel builds for msbuild
     list(APPEND CMAKE_VS_GLOBALS UseMultiToolTask=true)
     list(APPEND CMAKE_VS_GLOBALS EnforceProcessCountAcrossBuilds=true)
 endif()
@@ -89,7 +74,6 @@ else()
     set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
 endif()
 
-# subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
         OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
     set(LLAMA_SUBPROCESS_DEFAULT OFF)
@@ -97,26 +81,13 @@ else()
     set(LLAMA_SUBPROCESS_DEFAULT ON)
 endif()
 
-#
-# option list
-#
-
-# debug
 option(LLAMA_ALL_WARNINGS           "llama: enable all compiler warnings"                   ON)
 option(LLAMA_ALL_WARNINGS_3RD_PARTY "llama: enable all compiler warnings in 3rd party libs" OFF)
-
-# build
 option(LLAMA_FATAL_WARNINGS "llama: enable -Werror flag" OFF)
-
-# sanitizers
 option(LLAMA_SANITIZE_THREAD    "llama: enable thread sanitizer"    OFF)
 option(LLAMA_SANITIZE_ADDRESS   "llama: enable address sanitizer"   OFF)
 option(LLAMA_SANITIZE_UNDEFINED "llama: enable undefined sanitizer" OFF)
-
-# utils
 option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE})
-
-# extra artifacts
 option(LLAMA_BUILD_TESTS     "llama: build tests"                                                                ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_TOOLS     "llama: build tools"                                                                ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
@@ -124,17 +95,23 @@ option(LLAMA_BUILD_SERVER    "llama: build server example"                      
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
 option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
-
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
-
-# 3rd party libs
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
+# =================================================================
+# [NAI] Telemetría del Motor NAI
+# =================================================================
+option(LLAMA_NAI_TELEMETRY "llama: enable NAI engine telemetry (sampling + kv cache)" ON)
 
-# Required for relocatable CMake package
+if (LLAMA_NAI_TELEMETRY)
+    message(STATUS "NAI: telemetry ENABLED (LLAMA_NAI_TELEMETRY=1)")
+else()
+    message(STATUS "NAI: telemetry disabled")
+endif()
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
 
@@ -146,11 +123,9 @@ if (NOT DEFINED LLAMA_BUILD_COMMIT)
 endif()
 set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 
-# override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
 
-# change the default for these ggml options
 if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
@@ -159,7 +134,6 @@ if (NOT DEFINED GGML_CUDA_GRAPHS)
     set(GGML_CUDA_GRAPHS_DEFAULT ON)
 endif()
 
-# transition helpers
 function (llama_option_depr TYPE OLD)
     if (${OLD})
         set(NEW "${ARGV2}")
@@ -186,10 +160,6 @@ llama_option_depr(WARNING     LLAMA_CURL)
 include("cmake/license.cmake")
 license_add_file("llama.cpp" "LICENSE")
 
-#
-# 3rd-party
-#
-
 if (LLAMA_USE_SYSTEM_GGML)
     message(STATUS "Using system-provided libggml, skipping ggml build")
     find_package(ggml REQUIRED)
@@ -200,18 +170,21 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
     set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
-    # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
-#
-# build the library
-#
+if (LLAMA_NAI_TELEMETRY)
+    add_compile_definitions(LLAMA_NAI_TELEMETRY=1)
+endif()
 
 add_subdirectory(src)
 
-#
-# utils, programs, examples and tests
-#
+# =================================================================
+# [NAI] Añadir los archivos fuente del motor NAI a la librería
+# =================================================================
+target_sources(llama PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/nai-telemetry-hub.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/nai-kv-sharing.cpp
+)
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
@@ -236,19 +209,10 @@ if (LLAMA_BUILD_APP)
     add_subdirectory(app)
 endif()
 
-# Standalone libmtmd build without pulling in the rest of the tools/ tree.
-# Useful when packaging just the mtmd library for language bindings (e.g. an
-# Apple XCFramework, or a WASM build). When the full tools build is enabled,
-# mtmd is already built by the tools/ subdirectory above; this hook only fires
-# when LLAMA_BUILD_TOOLS is OFF to avoid double-adding the target.
 option(LLAMA_BUILD_MTMD "llama: build tools/mtmd library standalone" OFF)
 if (LLAMA_BUILD_MTMD AND NOT (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS))
     add_subdirectory(tools/mtmd)
 endif()
-
-#
-# install
-#
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -261,9 +225,7 @@ set(LLAMA_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
 
-set_target_properties(llama
-    PROPERTIES
-        PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+set_target_properties(llama PROPERTIES PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
@@ -288,9 +250,5 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
-configure_file(cmake/llama.pc.in
-        "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
-        @ONLY)
-
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+configure_file(cmake/llama.pc.in "${CMAKE_CURRENT_BINARY_DIR}/llama.pc" @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc" DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
