@@ -315,7 +315,7 @@ Para trascender el cálculo secuencial convencional, NAI modela el flujo de tens
 
 ---
 
-### 1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
+### 10.1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
 * **De qué trata en la física:** El coeficiente de restitución mide la conservación de la energía cinética en un choque entre cuerpos. Una colisión perfectamente elástica preserva toda la energía ($e = 1$), mientras que una inelástica disipa energía en forma de calor o deformación ($0 \le e < 1$).
 * **Cómo se aplica en NAI:** Conecta el estado latente inicial del token de entrada $h^{(0)}$ con su proyección final post-capas o post-salida temprana $h^{(final)}$. El coeficiente de elasticidad latente regula cuánta "energía informacional" se retiene:
   $$h^{(final)} = \mathcal{T}_{\text{capas}}(h^{(0)}) \cdot e^{-\lambda \cdot \text{Disipación}}$$
@@ -323,7 +323,7 @@ Para trascender el cálculo secuencial convencional, NAI modela el flujo de tens
 
 ---
 
-### 2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
+### 10.2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
 * **De qué trata en la física:** En física de partículas y mecánica cuántica, la Matriz S (*Scattering Matrix*) relaciona el estado cuántico inicial de partículas libres antes de una colisión con el estado final después de interactuar mediante un potencial.
 * **Cómo se aplica en NAI:**
   - **Dispersión Elástica ($\hat{S}_{\text{elástica}}$):** Se aplica en la Autopista de Muestreo. El tensor de logits rebota a través de los criterios de decisión (`DecisionInercia`) sin alterar la pureza semántica de la ruta óptima, conservando el momento informacional exacto.
@@ -331,31 +331,112 @@ Para trascender el cálculo secuencial convencional, NAI modela el flujo de tens
 
 ---
 
-### 3. Disipación de Energía Cinética en el Nodo Intermedio
+### 10.3. Disipación de Energía Cinética en el Nodo Intermedio
 * **De qué trata en la física:** La pérdida de energía mecánica útil en sistemas disipativos debido a fricciones internas o turbulencias.
 * **Cómo se aplica en NAI:** Cuando el Triaje Latente o el Tronco de Capas detecta redundancia sintáctica, la energía cinética del gradiente se disipa deliberadamente en el nodo intermedio (Capa 12). Esto impide el desperdicio de ciclos de GPU en procesar tokens cuya inercia ya determinó el resultado.
 
 ---
 
-### 4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
-* **De qué trata en la física:** Modela las trayectorias gravitacionales de múltiples cuerpos celestes interactuando simultáneamente en el espacio sin una solución analítica simple.
-* **Cómo se aplica en NAI:** Es el corazón del **Modelo Gravitatorio de Tres Cuerpos del KV Cache**. Cada token almacenado actúa como un cuerpo masivo que ejerce atracción o repulsión sobre los tensores circundantes, simulando una órbita de atención dinámica donde los tokens irrelevantes escapan del sistema gravitatorio central.
+### 10.4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
+
+#### A. De qué trata en la física y por qué se aplica en NAI
+* **En la física clásica y celeste:** El problema de los $N$-cuerpos (y de forma célebre el **problema de los tres cuerpos**) describe cómo múltiples objetos masivos (como estrellas, planetas o lunas) interactúan gravitacionalmente entre sí en el espacio tridimensional. Debido a la no linealidad de las ecuaciones de movimiento de Newton y Einstein, el sistema carece de una solución analítica general y cerrada; evoluciona a través de órbitas caóticas, resonancias gravitacionales y eyecciones donde los cuerpos de menor masa terminan siendo expulsados del sistema estelar central hacia el espacio profundo.
+* **¿Cómo se aplica en el Motor NAI?** En las arquitecturas tradicionales de LLMs, el búfer de atención (KV Cache) trata todos los tokens pasados bajo una matriz de atención estática ($Q \cdot K^T$), donde la memoria se satura linealmente y el contexto antiguo se degrada de manera artificial o uniforme. NAI transforma el KV Cache en un **sistema dinámico de N-cuerpos estelar**, donde cada token $i$ actúa como un "cuerpo masivo" provisto de una masa semántica intrínseca $I_i$. 
+
+En lugar de almacenar ciegamente todo el historial, los tensores de clave y valor ($K, V$) interactúan mediante un campo gravitatorio de tres cuerpos de referencia (el token actual de consulta, el ancla semántica del prompt del sistema y el contexto histórico circundante). Los tokens con alta masa semántica forman pozos gravitatorios profundos que atraen y retienen la atención de los tokens cercanos, mientras que los tokens de relleno sintáctico experimentan inestabilidad orbital y son expulsados dinámicamente del búfer activo, simulando una eyección gravitacional.
 
 ---
 
-### 5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
-* **De qué trata en la física:** La Ley de Hubble describe cómo el universo se expande, provocando que los objetos distantes se alejen a una velocidad proporcional a su distancia, diluyendo la densidad de energía del cosmos.
-* **Cómo se aplica en NAI:** En los contextos masivos (>32k tokens), la distancia temporal y posicional entre los tokens genera una "expansión del espacio de contexto". NAI introduce un coeficiente de expansión cosmológica local análogo a la constante de Hubble ($H_0$), haciendo que los tokens más antiguos sufran una separación métrica y un enfriamiento proporcional a su lejanía respecto al foco atencional actual.
+#### B. Formulación Matemática de la Matriz S y Dinámica de N-Cuerpos en el KV Cache
+
+Para formalizar la transición de estados y la interacción gravitacional en el espacio de atención de NAI, expresamos la evolución del estado orbital de los tokens mediante el operador de la **Matriz S de Dispersión Gravitacional ($\hat{S}_{\text{grav}}$)**:
+
+$$\left| \psi_{\text{salida}} \rangle = \hat{S}_{\text{grav}} \left( \sum_{j=1}^{N} \frac{G \cdot I_i \cdot I_j}{|\mathbf{r}_i - \mathbf{r}_j|^2} \right) \big| \psi_{\text{entrada}} \rangle$$
+
+Donde la fuerza de interacción gravitacional efectiva $\mathbf{F}_{ij}$ que experimenta el token $i$ respecto al token circundante $j$ en el espacio latente está dada por:
+
+$$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{(\mathbf{r}_i - \mathbf{r}_j)^3} (\mathbf{r}_i - \mathbf{r}_j) - \eta \cdot \mathbf{v}_i$$
+
+* **Variables y Parámetros del Sistema:**
+  * **$G_{\text{efectivo}}$:** Constante de acoplamiento gravitacional del motor, que calibra la intensidad de la atracción semántica en el KV Cache.
+  * **$I_i, I_j$:** Masas semánticas intrínsecas de los tokens $i$ y $j$, calculadas a partir de su norma vectorial y su entropía local ($I_i = \|W_K x_i\|_2 \cdot [1 + \mathcal{H}_{\text{local}}(x_i)]$).
+  * **$\mathbf{r}_i, \mathbf{r}_j$:** Coordenadas vectoriales de los tokens dentro del espacio latente de atención.
+  * **$-\eta \cdot \mathbf{v}_i$:** Término de fricción dinámica o disipación orbital, responsable de amortiguar las oscilaciones erráticas y estabilizar las trayectorias de atención de largo plazo.
+
+* **Comportamiento Arquitectónico:** 
+  Mediante este formalismo de N-cuerpos, la Matriz S calcula la dispersión del campo de atención: los tokens que colisionan con trayectorias de baja masa semántica y alta velocidad relativa escapan del radio de Hill del sistema de atención, liberando memoria de la GPU de manera orgánica sin necesidad de truncamientos abruptos por ventanas deslizantes rígidas.
 
 ---
 
-### 6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
-* **De qué trata en la física:** En relatividad general, el espacio y el tiempo no son una cuadrícula cartesiana rígida e invariable, sino una métrica flexible geométrica curvada por la masa y la energía.
-* **Cómo se aplica en NAI:** El "tiempo" de contexto no avanza como un simple contador lineal de tokens ($t = 1, 2, 3\dots$). El tiempo en NAI es **emergente y no cartesiano**: avanza más rápido en zonas de baja masa semántica (dilatación temporal del relleno) y se detiene o densifica en pozos gravitatorios profundos de alta relevancia (contracción de la atención).
+### 10.5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
+
+#### A. De qué trata en la física y por qué se aplica en NAI
+* **En la física y cosmología moderna:** La **Ley de Hubble-Lemaître** describe la observación astronómica de que las galaxias distantes se alejan unas de otras a una velocidad proporcional a su distancia (expresada mediante la constante de Hubble $H_0$). Esta expansión métrica del espacio no ocurre porque los objetos se muevan mecánicamente a través del cosmos, sino porque el propio tejido del espacio-tiempo se estira, provocando una dilución progresiva de la densidad de energía, un corrimiento hacia el rojo (*redshift*) de la radiación y un enfriamiento generalizado del universo.
+* **¿Cómo se aplica en el Motor NAI?** En las arquitecturas tradicionales de LLMs, cuando una conversación o un documento excede ventanas masivas de contexto (por ejemplo, >32,000 tokens), el modelo sufre de saturación y degradación de la atención, tratando los tokens remotos con la misma métrica espacial que los tokens inmediatos. NAI resuelve esto introduciendo una **expansión métrica del espacio de contexto**. 
+
+A medida que un token se desplaza hacia el pasado histórico (a mayor distancia posicional y temporal respecto al foco atencional actual del cabezal de inferencia), el motor aplica un campo de expansión análogo a la constante de Hubble local ($H_{\text{local}}$). Esto provoca que la distancia métrica efectiva entre los tokens antiguos aumente de forma exponencial y que su influencia gravitatoria se diluya progresivamente, simulando un "corrimiento al rojo informacional" que enfría el ruido histórico y preserva los recursos de la GPU para el núcleo activo de razonamiento.
 
 ---
 
-### 7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
+#### B. Formulación Matemática de la Expansión Cosmológica del Contexto
+
+Para modelar matemáticamente esta expansión métrica en el espacio de tensores de atención, definimos el **Factor de Escala del Contexto ($a(t)$)**, el cual rige la evolución de la distancia métrica efectiva $\chi_{ij}$ entre el token de atención actual y los tokens históricos:
+
+$$d\chi_{ij}(t) = a(t) \cdot dx_0$$
+
+Donde la tasa de expansión temporal del espacio de contexto obedece a la ecuación diferencial de Friedmann adaptada al motor:
+
+$$\left( \frac{\dot{a}(t)}{a(t)} \right)^2 = H_{\text{local}}^2 = \frac{8\pi G}{3} \rho_{\text{contexto}}(t) - \frac{k}{a(t)^2} + \Lambda_{\text{local}}$$
+
+* **Evolución del Tensor de Clave bajo Expansión Cosmológica:**
+  La atenuación de la representación vectorial del token $K_i$ debido al estiramiento del espacio de contexto a lo largo del tiempo emergente está dada por:
+
+$$K_i(t) = K_i(0) \cdot \exp\left( - \int_{0}^{t} H_{\text{local}} \cdot z_{\text{redshift}}(\tau) \, d\tau \right)$$
+
+* **Parámetros y Componentes del Sistema:**
+  * **$H_{\text{local}}$:** Constante de Hubble local del motor, que regula la velocidad a la que el espacio de contexto se expande para los tokens distantes.
+  * **$\rho_{\text{contexto}}(t)$:** Densidad informacional global del búfer de tokens en el instante $t$.
+  * **$\Lambda_{\text{local}}$:** Constante cosmológica artificial del sistema, que actúa como una presión de vacío repulsiva para evitar el colapso total de la memoria ante contextos masivos.
+  * **$z_{\text{redshift}}$:** Factor de degradación espectral, que mide qué tan "lejos" (en términos de turnos conversacionales o distancia de tokens) se encuentra el dato histórico respecto al presente computacional del modelo.
+
+* **Comportamiento Arquitectónico:**
+  Gracias a esta formulación cosmológica, los tokens distantes no se eliminan de golpe de forma arbitraria, sino que experimentan una separación métrica controlada y un enfriamiento por expansión, imitando la termodinámica de un universo en expansión que purga naturalmente el desorden y la entropía de los datos obsoletos.
+
+---
+
+### 10.6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
+
+#### A. ¿De qué trata este concepto en la física y por qué se aplica en NAI?
+En la física clásica y en las arquitecturas de transformadores tradicionales (como el *Vanilla Transformer* y `llama.cpp`), el tiempo y el espacio de contexto operan sobre una **cuadrícula cartesiana rígida y lineal**:
+* El tiempo es simplemente un contador secuencial de tokens discretos ($t = 1, 2, 3 \dots N$).
+* La posición espacial de los tokens en el vector de atención se calcula mediante coordenadas rígidas (como las codificaciones posicionales absolutas o relativas tipo RoPE) donde cada paso de distancia consume idéntico "espacio métrico".
+
+Sin embargo, en la **Relatividad General**, el espacio-tiempo no es un fondo estático, sino una geometría flexible y dinámica (**métrica de Riemann**) que se curva y deforma en presencia de masa y energía. 
+
+**¿Cómo se aplica esto en el Motor NAI?** 
+En NAI, la conversación o el documento no es una línea recta de tokens. El motor de contexto opera sobre un **espacio-tiempo no cartesiano emergente**, donde:
+1. **Dilatación Temporal del Relleno:** En las zonas de baja masa semántica (texto de relleno, saludos, transiciones sintácticas o explicaciones redundantes), el "tiempo computacional" se dilata; los tokens se desplazan rápidamente hacia el olvido métrico mediante el enfriamiento exponencial ($dt$).
+2. **Contracción Espacial en Pozos Gravitatorios:** En las zonas de alta densidad semántica (instrucciones críticas, variables de código, restricciones lógicas), el espacio métrico se contrae. Los tokens masivos se atraen gravitacionalmente, acortando su distancia efectiva de atención independientemente de cuántos tokens de distancia física los separen en la secuencia bruta.
+
+---
+
+#### B. Formulación Matemática del Espacio-Tiempo No Cartesiano en NAI
+
+Para modelar esta métrica emergente, definimos el intervalo de espacio-tiempo de contexto $ds^2$ mediante un tensor métrico modificado $g_{\mu\nu}$:
+
+$$ds^2 = g_{\mu\nu}(x) dx^\mu dx^\nu = -\left(1 - \frac{2GM_{\text{local}}}{r c^2}\right) c^2 dt_{\text{emergente}}^2 + \left(1 - \frac{2GM_{\text{local}}}{r c^2}\right)^{-1} dr^2 + r^2 d\Omega^2$$
+
+Donde la evolución del tiempo emergente del sistema $dt_{\text{emergente}}$ en relación con el tiempo de procesamiento secuencial crudo $dt_{\text{gpu}}$ está governada por la densidad de inercia local $\Delta h$ y la masa semántica $I_i$:
+
+$$\frac{dt_{\text{emergente}}}{dt_{\text{gpu}}} = \sqrt{1 - \frac{\gamma \cdot \Delta h(t)}{I_i + \varepsilon}}$$
+
+* **Interpretación de la Ecuación:**
+  - Cuando la inercia latente $\Delta h$ es baja (tokens altamente predecibles), el radical tiende a 1, acelerando el flujo temporal y permitiendo el salto (*Early Exit* o *Bypass*).
+  - Cuando el token se encuentra en un **Nodo de Conflicto** (alta entropía, $I_i$ elevado), el factor métrico de curvatura frena el tiempo computacional efectivo, obligando a la red a dedicar mayor densidad de procesamiento (capas profundas) a resolver la ambigüedad conceptual.
+
+---
+
+### 10.7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
 * **De qué trata conceptualmente:** La síntesis absoluta de las leyes de campo, inercia, gravedad y disipación aplicadas a la cognición artificial.
 * **Formulación del Sistema Completo Unificado:**
 
