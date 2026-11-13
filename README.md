@@ -177,14 +177,14 @@ CMake 3.14+.
 
 ### Instrucciones de Compilación (CMake)
 
-# Clonar y acceder al repositorio
+#### Clonar y acceder al repositorio
 cd NAIEngine-llama.cpp
 
-# Crear directorio de compilación y configurar
+#### Crear directorio de compilación y configurar
 mkdir build && cd build
 cmake .. -DLLAMA_NATIVE=ON
 
-# Compilar binarios optimizados en modo Release
+#### Compilar binarios optimizados en modo Release
 cmake --build . --config Release -j
 
 ---
