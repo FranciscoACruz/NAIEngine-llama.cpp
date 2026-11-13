@@ -43,6 +43,20 @@ A diferencia de los entornos volátiles donde cada hilo conversacional nace y mu
 - El mapa semántico latente se almacena de forma estructurada, permitiendo que al retomar la sesión dentro diurna o nocturna, el motor conserve el contexto conversacional profundo sin necesidad de reevaluar el *prefill* histórico masivo desde cero.
 - Esto dota al sistema de una verdadera **continuidad de consciencia operativa**, ideal para aplicaciones móviles y agentes autónomos de alta exigencia que imitan la persistencia de la memoria humana a corto y mediano plazo.
 
+### C. Modelo Gravitatorio de Tres Cuerpos en el KV Cache (Fórmula de Interacción)
+Para modelar la persistencia de los tokens clave y la degradación del ruido conversacional, la actualización del tensor de claves $K_i$ en función del tiempo y la masa semántica se define formalmente mediante el siguiente operador de campo de tres cuerpos:
+
+$$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
+
+* **$K_i(t)$:** Tensor de clave original del token $i$ en el tiempo $t$.
+* **$\gamma$:** Coeficiente global de disipación térmica y entrópica del sistema.
+* **$dt$:** Incremento temporal discreto entre iteraciones de contexto.
+* **$I_i$:** Masa semántica intrínseca del token, calculada como:
+  $$I_i = \|W_K x_i\|_2 \cdot \left(1 + \mathcal{H}_{\text{local}}(x_i)\right)$$
+* **$\varepsilon$:** Constante infinitesimal de suavizado numérico para evitar indeterminaciones por división entre cero.
+* **Comportamiento Físico:** Los tokens con alta masa semántica ($I_i \gg 0$) preservan su pozo gravitatorio de atención de manera indefinida, mientras que el relleno sintáctico o de baja relevancia decae exponencialmente hacia el cero absoluto, purgando el ruido en contextos masivos.
+
+
 ---
 
 ## 4. Desglose Exhaustivo de Capas del Pipeline y Subsistemas
@@ -156,9 +170,8 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 └─────────────────────────┘     antes de la construcción del grafo del nuevo batch.
 ```
 
-### Implementación del Bypass en sampling.cpp
-
-
+### Implementación del Bypass en `sampling.cpp`
+```cpp
 DecisionInercia dec = evaluar_inercia_y_equivalencia(gsm->cur_p);
 
 if (dec.es_autopista) {
@@ -166,6 +179,8 @@ if (dec.es_autopista) {
             __func__, dec.codigo_razon, dec.margen, gsm->cur_p.data[0].id);
     return gsm->cur_p.data[0].id;
 }
+```
+
 
 ## 8. Compilación y Requisitos de Sistema
 ### Requisitos Técnicos
