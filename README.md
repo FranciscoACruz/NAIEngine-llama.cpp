@@ -22,6 +22,11 @@ Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada toke
 
 ---
 
+
+
+
+
+
 ## 2. El Ciclo de Vida de Sesión de 24 Horas (Persistencia de Consciencia)
 
 Para que el motor mantenga una continuidad coherente en aplicaciones del mundo real (como plataformas móviles y agentes avanzados), NAI implementa un administrador de sesiones persistentes:
@@ -29,6 +34,12 @@ Para que el motor mantenga una continuidad coherente en aplicaciones del mundo r
 - **Mecánica de Sincronización:** El estado latente acumulado y los metadatos del mapa semántico se vinculan al identificador de sesión, permitiendo que el usuario retome un hilo conversacional complejo sin necesidad de reevaluar todo el prefill histórico desde cero, reduciendo drásticamente la latencia de arranque (*Time-to-First-Token*).
 
 ---
+
+
+
+
+
+
 
 ## 3. Filosofía del Sistema: La Menor Acción Energética y la Consciencia Artificial
 
@@ -59,6 +70,13 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 
 ---
 
+
+
+
+
+
+
+
 ## 4. Desglose Exhaustivo de Capas del Pipeline y Subsistemas
 
 ### Capa 1: TriageEngine (Filtro Quirúrgico / Prefiltro Header-Only)
@@ -78,7 +96,7 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
   - Rastrea en tiempo real el estado latente y la inercia acumulada del contexto actual.
   - Valida de forma estricta los punteros de los búferes (`logits`, `probs`, `candidates`, `sampled`) mediante aserciones de sistema (`GGML_ASSERT`) para prevenir desbordamientos en la memoria unificada de la GPU.
 
-  ### Capa 3: Autopista de Inercia y Muestreo (`sampling.cpp` / `sampling.h`)
+### Capa 3: Autopista de Inercia y Muestreo (`sampling.cpp` / `sampling.h`)
 * **Estructura de Decisión:** `DecisionInercia` y función de evaluación `evaluar_inercia_y_equivalencia`.
 * **Propósito de Ingeniería:** El cuello de botella clásico en la generación de texto reside en la evaluación secuencial de samplers pesados (como `DRY`, `XTC`, `Mirostat`, penalizaciones de repetición, etc.) en cada paso de muestreo.
 * **Criterios de Activación del Bypass (Vía Rápida):**
@@ -89,6 +107,13 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
   - **Código 0 (Conflicto / Falla):** El tensor se cataloga como ambigua y se ejecuta la cadena completa de samplers.
 
 ---
+
+
+
+
+
+
+
 
 ## 5. Fundamentos Matemáticos y Estructuras de Tensores
 
@@ -118,6 +143,13 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 *Los tokens estructurales preservan su pozo gravitatorio, mientras que el relleno sintáctico se atenúa exponencialmente.*
 
 ---
+
+
+
+
+
+
+
 
 ## 6. Diagrama de Flujo del Pipeline de Ejecución
 ```text
@@ -151,6 +183,13 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 ```
 
 
+
+
+
+
+
+
+
 ## 7. Integración Técnica en el Código Fuente
 ### Secuencia de Enlaces de Módulos
 
@@ -182,6 +221,13 @@ if (dec.es_autopista) {
 ```
 
 
+
+
+
+
+
+
+
 ## 8. Compilación y Requisitos de Sistema
 ### Requisitos Técnicos
 ### Compilador C++17 o superior (GCC, Clang o MSVC).
@@ -193,16 +239,28 @@ CMake 3.14+.
 ### Instrucciones de Compilación (CMake)
 
 #### Clonar y acceder al repositorio
+```text
 cd NAIEngine-llama.cpp
+```
 
 #### Crear directorio de compilación y configurar
+```text
 mkdir build && cd build
 cmake .. -DLLAMA_NATIVE=ON
+```
 
 #### Compilar binarios optimizados en modo Release
 cmake --build . --config Release -j
 
 ---
+
+
+
+
+
+
+
+
 
 ## 9. Benchmarks de Rendimiento y Análisis de Concurrencia
 
@@ -215,11 +273,14 @@ Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
 cd build
 
 ##### Ejecutar todas las pruebas unitarias del motor NAI (Inercia, Triaje y KV Cache)
+```text
 ctest --output-on-failure -R nai
+```
 
 ##### O bien, ejecutar de forma directa el binario de validación de inercia y muestreo
+```text
 ./bin/test-nai-sampling --vocab-model ../models/qwen2/ggml-model.gguf
-
+```
 
 ##### Interpretación de los Resultados de TestTest de Inercia Latente (test-nai-inertia): Valida que la entropía espectral $\Delta h$ dispare el umbral de Early Exit exclusivamente cuando la distribución de probabilidad supere el margen estricto $\tau_{\text{autopista}}$.Test de Coherencia de Sesión (test-nai-session): Simula el ciclo de vida de 24 horas y la persistencia del mapa semántico g_nai_mapa_masa bajo concurrencia multihilo.
 
@@ -246,6 +307,14 @@ ctest --output-on-failure -R nai
 
 ---
 
+
+
+
+
+
+
+
+
 ## 10. Consideraciones Técnicas y Advertencias de Uso
 
 1. **Interacción con Gramáticas Estrictas:**
@@ -258,6 +327,14 @@ ctest --output-on-failure -R nai
    - La estructura global `nai::MapaMasaSemantica g_nai_mapa_masa` implementada en `llama-context.cpp` debe protegerse mediante cerrojos de exclusión mutua (*mutex/locks*) o ser instanciada por contexto de forma aislada en caso de ejecutar inferencia concurrente en múltiples instancias paralelas de `llama_context`.
 
 ---
+
+
+
+
+
+
+
+
 
 ## 11. Licencia
 
