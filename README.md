@@ -208,6 +208,22 @@ cmake --build . --config Release -j
 
 Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
 
+### Instrucciones para Ejecutar la Suite de Pruebas (test)
+#### Una vez compilado el proyecto en el directorio build, puedes ejecutar las pruebas unitarias y de estrés mediante CTest o invocando directamente los binarios de test:
+
+##### Entrar al directorio de compilación
+cd build
+
+##### Ejecutar todas las pruebas unitarias del motor NAI (Inercia, Triaje y KV Cache)
+ctest --output-on-failure -R nai
+
+##### O bien, ejecutar de forma directa el binario de validación de inercia y muestreo
+./bin/test-nai-sampling --vocab-model ../models/qwen2/ggml-model.gguf
+
+
+##### Interpretación de los Resultados de TestTest de Inercia Latente (test-nai-inertia): Valida que la entropía espectral $\Delta h$ dispare el umbral de Early Exit exclusivamente cuando la distribución de probabilidad supere el margen estricto $\tau_{\text{autopista}}$.Test de Coherencia de Sesión (test-nai-session): Simula el ciclo de vida de 24 horas y la persistencia del mapa semántico g_nai_mapa_masa bajo concurrencia multihilo.
+
+
 ### A. Rendimiento de Carga y Autopista
 - **Prefill Normal (Seq 0):** `82.01 ms` (`475.54 tok/s`)
 - **Prefill NAI Sharing (Seq 1):** `15.70 ms` *(El KV Cache se copió y solo procesó 1 token gracias al intercambio inteligente)*.
