@@ -106,7 +106,7 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 ---
 
 ## 6. Diagrama de Flujo del Pipeline de Ejecución
-
+```text
 [ Entrada: Prompt / Token ]
              │
              ▼
@@ -134,7 +134,7 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
              │    (Modelo de los 3 Cuerpos)    │     gravitatorio se colapsan
              └─────────────────────────────────     o atenúan por enfriamiento (dt)
 
-
+```
 
 
 ## 7. Integración Técnica en el Código Fuente
