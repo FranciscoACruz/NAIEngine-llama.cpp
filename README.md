@@ -129,19 +129,41 @@ $$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
   - Si $\Delta h \le \tau_{\text{autopista}}$: Se interpreta como un Nodo de Conflicto y se deriva a las capas profundas.
 
 ### B. Memoria de Masa Gravitatoria (Modelo de los 3 Cuerpos en el KV Cache)
-Para evitar la saturación de contexto, el KV Cache implementa un campo de atenuación gravitatoria dependiente del tiempo:
 
-1. **Masa Semántica ($I_i$):**
+#### 1. El Problema Raíz en los Transformers Tradicionales
+En las arquitecturas estándar (como el *Vanilla Attention* de `llama.cpp`), el mecanismo de atención calcula la matriz de pesos mediante la similitud de producto punto escalado:
 
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
+
+* **La Falla Física:** Este enfoque trata el historial conversacional como un conjunto de vectores planos e isotrópicos donde el peso de cada token depende exclusivamente de su proximidad sintáctica superficial respecto al *Query* actual. A medida que el contexto crece (>32k tokens), el sistema sufre una **saturación entrópica** (*lost in the middle*), donde el ruido de relleno, las repeticiones y las transiciones conversacionales triviales compiten con idéntica "presión de atención" frente a las instrucciones críticas o variables de código, colapsando la memoria de la GPU y degradando la coherencia a largo plazo.
+
+---
+
+#### 2. Deducción del Modelo Gravitatorio y Derivación de la Masa Semántica ($I_i$)
+Para resolver esto, nos inspiramos en un principio astrofísico fundamental: *¿Cómo logra un sistema natural almacenar y priorizar información masiva a lo largo del tiempo sin colapsar por saturación?* La respuesta es la **gravedad**. En el universo, la materia no se distribuye de forma plana; se agrupa en pozos gravitatorios proporcionales a su masa y densidad.
+
+Al trasladar esto al dominio de los tensores de lenguaje, concluimos que un token no debe tener un peso estático, sino una **masa semántica intrínseca ($I_i$)** compuesta por dos fuerzas fundamentales:
+- **La Intensidad Proyectada de la Clave ($\|W_K x_i\|_2$):** Mide la energía intrínseca y la magnitud geométrica del vector clave en el espacio latente. Un token que representa una regla de código o una definición clave tiene una norma vectorial marcadamente superior al ruido conversacional.
+- **La Entropía Local de Contexto ($\mathcal{H}_{\text{local}}(x_i)$):** Cuantifica la densidad de información y la incertidumbre sintáctica del entorno inmediato del token.
+
+Multiplicando ambos factores, definimos formalmente la **Masa Semántica ($I_i$)**:
 
 $$I_i = \|W_K x_i\|_2 \cdot \left(1 + \mathcal{H}_{\text{local}}(x_i)\right)$$
 
-2. **Decaimiento Temporal y Enfriamiento ($dt$):**
+---
 
-$$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
+#### 3. Decaimiento Temporal y Enfriamiento del KV Cache ($dt$)
+Para evitar la saturación de contexto y permitir que los tokens de baja masa se enfríen y desvanezcan con el paso del tiempo emergente ($dt$), aplicamos los principios de la termodinámica de sistemas disipativos. La evolución del tensor de clave obedece a la ecuación diferencial de atenuación:
 
-*Los tokens estructurales preservan su pozo gravitatorio, mientras que el relleno sintáctico se atenúa exponencialmente.*
+$$\frac{dK_i}{dt} = -\frac{\gamma}{I_i + \varepsilon} K_i$$
 
+Cuya solución analítica integrada da como resultado la **Fórmula Maestra del KV Cache Gravitatorio** implementada en el motor:
+
+$$K_i(t + dt) = K_i(0) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
+
+* **Comportamiento Arquitectónico:** 
+  - Los tokens estructurales y de alta relevancia ($I_i \gg 0$) preservan su pozo gravitatorio y su inercia de atención de manera indefinida.
+  - El relleno sintáctico o de baja relevancia ($I_i \to 0$) sufre un enfriamiento exponencial acelerado, purgándose de la memoria de la GPU de manera orgánica y manteniendo la atención limpia y libre de ruido en contextos masivos.
 ---
 
 
