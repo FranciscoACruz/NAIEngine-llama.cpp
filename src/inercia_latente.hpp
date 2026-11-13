@@ -97,6 +97,40 @@ public:
         return _masas[upos].load(std::memory_order_relaxed);
     }
 
+    // [NAI] Desplaza las masas cuando el KV Cache mueve las posiciones
+    // de los tokens (K-Shift). Usado por el Desalojo Gravitatorio.
+    void shift_masa(int start_pos, int end_pos, int delta) {
+        if (delta == 0 || _capacity == 0) return;
+        if (start_pos < 0 || end_pos > (int)_capacity) return;
+
+        if (delta > 0) {
+            for (int i = end_pos - 1; i >= start_pos; --i) {
+                if (i + delta < (int)_capacity) {
+                    float m = _masas[i].load(std::memory_order_relaxed);
+                    _masas[i + delta].store(m, std::memory_order_relaxed);
+                }
+            }
+            for (int i = start_pos; i < start_pos + delta; ++i) {
+                if (i >= 0 && i < (int)_capacity) {
+                    _masas[i].store(1.0f, std::memory_order_relaxed);
+                }
+            }
+        } else {
+            int abs_delta = -delta;
+            for (int i = start_pos; i < end_pos; ++i) {
+                if (i - abs_delta >= 0) {
+                    float m = _masas[i].load(std::memory_order_relaxed);
+                    _masas[i - abs_delta].store(m, std::memory_order_relaxed);
+                }
+            }
+            for (int i = end_pos - abs_delta; i < end_pos; ++i) {
+                if (i >= 0 && i < (int)_capacity) {
+                    _masas[i].store(1.0f, std::memory_order_relaxed);
+                }
+            }
+        }
+    }
+
     void limpiar() {
         if (_capacity == 0) return;
         for (size_t s = 0; s < SHARD_COUNT; ++s) _locks[s].lock();
@@ -190,10 +224,10 @@ inline void aplicar_atenuacion_tensor_fp16(
     }
 }
 
-
 inline MapaMasaSemantica g_nai_mapa_masa;
 
-}
+} // namespace nai
+
 inline InerciaLatenteResult evaluar_inercia_tensor(
     const float * data, size_t n_embd, float umbral = 3.2f)
 {

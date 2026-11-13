@@ -1332,7 +1332,47 @@ int llama_context::decode(const llama_batch & batch_inp) {
             nai::g_nai_kv_sharing.register_prefix(prefix_hash, seq_id);
         }
     }
-
+    ////
+        // =========================================================================
+    // [NAI] DESALOJO GRAVITATORIO (Memoria Infinita NAI)
+    // =========================================================================
+    if (memory && batch_inp.token && batch_inp.n_tokens > 0) {
+        const llama_seq_id seq_id = batch_inp.seq_id ? batch_inp.seq_id[0][0] : 0;
+        llama_pos p_max = memory->seq_pos_max(seq_id);
+        
+        if (p_max > 0 && p_max + (llama_pos)batch_inp.n_tokens >= (llama_pos)cparams.n_ctx - 16) {
+            int n_discard = 64; 
+            int start_scan = 64; 
+            
+            if (p_max - start_scan > n_discard + 16) {
+                int best_start = -1;
+                float min_avg_mass = 9999.0f;
+                
+                for (int i = start_scan; i < p_max - n_discard - 8; i += n_discard / 2) {
+                    float mass_sum = 0.0f;
+                    for (int j = 0; j < n_discard; ++j) {
+                        mass_sum += nai::g_nai_mapa_masa.obtener_masa(i + j);
+                    }
+                    float avg_mass = mass_sum / (float)n_discard;
+                    if (avg_mass < min_avg_mass) {
+                        min_avg_mass = avg_mass;
+                        best_start = i;
+                    }
+                }
+                
+                if (best_start != -1) {
+                    LLAMA_LOG_INFO("%s: [NAI Eviction] Evicting %d tokens at pos %d (Avg Mass: %.3f)\n", 
+                                   __func__, n_discard, best_start, min_avg_mass);
+                    
+                    memory->seq_rm(seq_id, best_start, best_start + n_discard);
+                    memory->seq_add(seq_id, best_start + n_discard, p_max + 1, -n_discard);
+                    nai::g_nai_mapa_masa.shift_masa(best_start + n_discard, p_max + 1, -n_discard);
+                }
+            }
+        }
+    }
+    // =========================================================================
+    /////
     if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
