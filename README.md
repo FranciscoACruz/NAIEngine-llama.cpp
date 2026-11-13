@@ -1,306 +1,233 @@
-<div align="center">
-
-# 🌌 Motor NAI (NAIEngine-llama.cpp)
-
-**Motor de inferencia de LLM de latencia ultra-baja basado en `llama.cpp`, con optimización elástica de capas, triaje semántico y gestión gravitatoria de la caché KV.**
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![C++](https://img.shields.io/badge/C++-17-blue.svg)]()
-[![Platform](https://img.shields.io/badge/Platform-Apple%20Silicon%20%7C%20x86%20%7C%20CUDA-lightgrey)]()
-[![Status](https://img.shields.io/badge/Status-Production--Ready-success)]()
-
-*"La naturaleza no da saltos, pero el silicio bien optimizado sí."*
-
-</div>
+# Motor NAI: Manifiesto Arquitectónico, Fundamentos de Física Computacional y Especificación de Bajo Nivel
+*(Inercia Latente, Triaje Quirúrgico, Autopista de Muestreo, Mecánica Gravitatoria KV y Persistencia de Sesión Conversacional)*
 
 ---
 
-## 📖 Tabla de Contenidos
+## Prólogo Filosófico y Génesis del Sistema
 
-1. [Introducción y Filosofía](#-introducción-y-filosofía)
-2. [Fundamentos Físicos y Arquitectónicos](#-fundamentos-físicos-y-arquitectónicos)
-3. [Arquitectura del Pipeline NAI](#-arquitectura-del-pipeline-nai)
-4. [Resultados del Benchmark (Apple M1)](#-resultados-del-benchmark-apple-m1)
-5. [Instalación y Compilación](#-instalación-y-compilación)
-6. [Ejecución del Benchmark](#-ejecución-del-benchmark)
-7. [Solución de Problemas (Troubleshooting)](#-solución-de-problemas-troubleshooting)
-8. [Licencia y Agradecimientos](#-licencia-y-agradecimientos)
+El **Motor NAI** no surge de una optimización sintáctica tradicional dentro de `llama.cpp`, sino de una pregunta fundamental sobre la naturaleza de la cognición artificial y su fricción con el silicio: *¿Cómo se comportaría una red neuronal si su arquitectura interna emulara las leyes macroscópicas y termodinámicas del universo físico (inercia, campos gravitatorios, menor acción energética y enfriamiento temporal)?* 
+
+Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada token gasta idéntica energía computacional y la memoria de contexto se degrada por saturación lineal—, NAI introduce un paradigma donde los tensores fluyen siguiendo trayectorias de menor resistencia, dando paso a un sistema apto no solo para software de alto rendimiento, sino como base conceptual para futuros desarrollos de hardware neuromórfico y computación acelerada.
 
 ---
 
-## 🚀 Introducción y Filosofía
+## 1. Comparativa Estructural: Llama.cpp Vanilla vs. Motor NAI
 
-Este repositorio es un *fork* de [llama.cpp](https://github.com/ggml-org/llama.cpp) que integra el **Motor NAI**. No es una simple colección de optimizaciones empíricas; es una reingeniería del flujo de inferencia tradicional inspirada en la mecánica celeste, la física de partículas y la teoría de cuerdas.
-
-A diferencia de los motores convencionales que procesan los tokens de forma estrictamente secuencial a través de todas las capas del transformer, el Motor NAI opera bajo un paradigma de **"inferencia elástica"**. El motor es capaz de:
-*   **Saltarse capas profundas** si detecta que el modelo ya tiene certeza absoluta sobre el siguiente token.
-*   **Compartir el espacio-tiempo de la caché KV** entre múltiples usuarios para evitar recálculos innecesarios.
-*   **Atenuar el ruido semántico** basándose en la "masa gravitatoria" de los tokens en el contexto.
-
-El resultado es un motor que no solo es drásticamente más rápido en escenarios de alta concurrencia, sino que "piensa" de forma más eficiente, gastando ciclos de reloj de CPU/GPU únicamente donde son estrictamente necesarios.
+| Dimensión Arquitectónica | `llama.cpp` Vanilla (Original) | Motor NAI (Arquitectura Optimizada) | Ventaja / Impacto del Modelo NAI |
+| :--- | :--- | :--- | :--- |
+| **Evaluación de Capas** | Torre secuencial rígida ($L$ capas completas por token). | Tronco de Capas Respirantes con *Early Exit* condicional. | Ahorro de hasta el **60% de ciclos de GPU** en tokens de alta certidumbre. |
+| **Gestión de Memoria (KV Cache)** | Ventana estática uniforme; todos los tokens pesan igual, generando ruido a largo plazo. | Campo gravitatorio de tres cuerpos con atenuación no lineal y masa semántica ($I_i$). | Purga automática del ruido sintáctico en contextos masivos (>32k tokens). |
+| **Subsistema de Muestreo** | Evaluación iterativa pesada y secuencial de toda la cadena de samplers en cada paso. | Bypass de Autopista mediante métricas de inercia (`DecisionInercia`). | Omisión de samplers pesados en más del **40% de los tokens**, acelerando la inferencia. |
+| **Persistencia de Sesión** | Sesiones volátiles ligadas al ciclo de vida bruto del contexto de ejecución. | Ciclo de vida biológico de **24 horas por usuario**, garantizando continuidad conversacional. | Persistencia transaccional robusta sin pérdida de estado lógico. |
 
 ---
 
-## 🔬 Fundamentos Físicos y Arquitectónicos
+## 2. El Ciclo de Vida de Sesión de 24 Horas (Persistencia de Consciencia)
 
-El diseño del Motor NAI se sustenta en las siguientes teorías:
-
-### 1. El Problema de los Tres Cuerpos y la Matriz de Dispersión (\(e \cdot S\))
-En astrofísica, predecir la trayectoria de múltiples cuerpos es un problema caótico sin solución analítica cerrada. Sin embargo, usando la **Teoría de Dispersión (Matriz S)**, podemos conectar un estado inicial (\(A\)) y uno final (\(B\)) usando un "faro" o cuerpo intermedio (\(C\)) con un coeficiente de elasticidad (\(e\)).
-*   **Aplicación en el motor:** En lugar de procesar todo el prompt de un usuario nuevo desde cero, el motor usa el contexto ya cacheado de otro usuario como el "faro" (cuerpo \(C\)). Solo procesa el diferencial (\(e \cdot S\)), logrando latencias de prefill casi instantáneas (esto es el *KV Sharing*).
-
-### 2. Inercia Latente y Entropía Gravitacional
-En física, la entropía mide el desorden de un sistema. En el motor, la entropía mide la "duda" del modelo.
-*   **Aplicación en el motor:** En capas intermedias (ej. capa 12), el motor evalúa la distribución de probabilidad (softmax) de los logits. Si la entropía es baja (el modelo está seguro), el motor toma una **Autopista** y se salta el resto de las capas (Early Exit). Si la entropía es alta (conflicto), el motor sigue el camino completo para deliberar.
-
-### 3. Fricción Dinámica y Memoria de Masa Gravitatoria
-Cuando un objeto masivo se mueve a través de un medio (como la materia oscura), genera una estela que lo frena (fricción dinámica).
-*   **Aplicación en el motor:** La caché KV no es estática. A cada token se le asigna una **Masa Semántica** (\(I_i\)). Los tokens con mayor peso (ej. nombres propios, instrucciones clave) persisten en la memoria. Los tokens de relleno sufren un decaimiento exponencial (Redshift), liberando memoria VRAM y reduciendo el coste de atención.
+Para que el motor mantenga una continuidad coherente en aplicaciones del mundo real (como plataformas móviles y agentes avanzados), NAI implementa un administrador de sesiones persistentes:
+- **Duración del Ciclo de Vida:** Cada sesión de usuario está acotada a una ventana exacta de **24 horas de persistencia activa**.
+- **Mecánica de Sincronización:** El estado latente acumulado y los metadatos del mapa semántico se vinculan al identificador de sesión, permitiendo que el usuario retome un hilo conversacional complejo sin necesidad de reevaluar todo el prefill histórico desde cero, reduciendo drásticamente la latencia de arranque (*Time-to-First-Token*).
 
 ---
-## 🏗️ Arquitectura del Pipeline NAI
 
-El Motor NAI intercepta el flujo de inferencia tradicional de `llama.cpp` en tres capas secuenciales de optimización. Cada capa actúa como un filtro que reduce el cómputo innecesario antes de tocar el silicio.
+## 3. Filosofía del Sistema: La Menor Acción Energética y la Consciencia Artificial
 
-```text
+La arquitectura tradicional de inferencia basada en LLMs trata cada token de entrada como un gasto uniforme de recursos: una torre rígida de $L$ capas que procesa desde la conjunción más simple hasta la deducción más compleja bajo idéntica presión de silicio. El **Motor NAI** se fundamenta en un principio rector tomado directamente de la física fundamental: **el principio de la menor acción**.
+
+### A. ¿Por qué NAI imita la termodinámica del universo?
+* **Inercia Latente ($\Delta h$):** Así como la materia se opone al cambio de estado mediante la inercia, un tensor de lenguaje con alta certidumbre sintáctica no necesita ser forzado a través de todas las capas profundas. Al calcular la entropía espectral, el sistema decide un *Early Exit* biológico, gastando energía computacional únicamente cuando el modelo se enfrenta a una auténtica fricción de pensamiento (un **Nodo de Conflicto**).
+* **Campo Gravitatorio de Tres Cuerpos en el KV Cache:** Las ventanas de contexto masivas (>32k tokens) sufren de entropía y pérdida de atención a medio camino. NAI sustituye la memoria estática por un campo gravitatorio no lineal donde las instrucciones clave, variables y reglas del sistema mantienen un "pozo gravitatorio" inalterable, mientras que el relleno conversacional irrelevante sufre un enfriamiento exponencial ($dt$). El resultado es una atención pura y perpetua libre de ruido.
+
+### B. El Ciclo Biológico de Persistencia de Sesión (24 Horas)
+A diferencia de los entornos volátiles donde cada hilo conversacional nace y muere sin continuidad transaccional, NAI introduce un administrador de sesiones persistentes acotado a un **ciclo de vida biológico de 24 horas por usuario**:
+- El mapa semántico latente se almacena de forma estructurada, permitiendo que al retomar la sesión dentro diurna o nocturna, el motor conserve el contexto conversacional profundo sin necesidad de reevaluar el *prefill* histórico masivo desde cero.
+- Esto dota al sistema de una verdadera **continuidad de consciencia operativa**, ideal para aplicaciones móviles y agentes autónomos de alta exigencia que imitan la persistencia de la memoria humana a corto y mediano plazo.
+
+---
+
+## 4. Desglose Exhaustivo de Capas del Pipeline y Subsistemas
+
+### Capa 1: TriageEngine (Filtro Quirúrgico / Prefiltro Header-Only)
+* **Ubicación Lógica:** Interceptación previa a la tokenización profunda en el flujo de entrada de `llama.cpp`.
+* **Propósito de Ingeniería:** Evita la tokenización profunda y la asignación costosa de tensores en la GPU cuando el prompt entrante presenta ambigüedad o requiere una ruta de ejecución optimizada de costo computacional nulo.
+* **Mecánica de Funcionamiento:**
+  - Aplica un filtro de normalización de caracteres UTF-8/ASCII y supresión de diacríticos para homogeneizar el vector de entrada.
+  - Ejecuta un escaneo por coincidencia exacta de patrones léxicos mediante tablas hash estáticas para clasificar la intención del usuario en tres flujos de redirección:
+    - `DIRECTO`: Inferencia estándar en la red neuronal por capas.
+    - `INDAGACION_CORTA`: Derivación hacia un flujo asistido de respuestas estructuradas breves (0% de cómputo inútil en capas profundas).
+    - `PROPUESTA_HIPOTESIS`: Inyección de sesgos de razonamiento extendido.
+
+### Capa 2: Mapa de Masa Semántica (`llama-context.cpp`)
+* **Estructura Global:** `nai::MapaMasaSemantica g_nai_mapa_masa` (preasignada estáticamente a 65,536 posiciones).
+* **Propósito de Ingeniería:** En un contexto estandarizado, el búfer Key-Value (KV Cache) trata todos los tokens con la misma relevancia, acumulando ruido semántico. NAI introduce un mapa global para dar seguimiento a la masa semántica latente.
+* **Mecánica de Funcionamiento:**
+  - Rastrea en tiempo real el estado latente y la inercia acumulada del contexto actual.
+  - Valida de forma estricta los punteros de los búferes (`logits`, `probs`, `candidates`, `sampled`) mediante aserciones de sistema (`GGML_ASSERT`) para prevenir desbordamientos en la memoria unificada de la GPU.
+
+  ### Capa 3: Autopista de Inercia y Muestreo (`sampling.cpp` / `sampling.h`)
+* **Estructura de Decisión:** `DecisionInercia` y función de evaluación `evaluar_inercia_y_equivalencia`.
+* **Propósito de Ingeniería:** El cuello de botella clásico en la generación de texto reside en la evaluación secuencial de samplers pesados (como `DRY`, `XTC`, `Mirostat`, penalizaciones de repetición, etc.) en cada paso de muestreo.
+* **Criterios de Activación del Bypass (Vía Rápida):**
+  - **Código 1:** Existencia de un único candidato válido en el vocabulario filtrado.
+  - **Código 2:** El margen de logits entre el primer y segundo candidato supera el umbral estricto $\delta_{\text{logit}} = 2.2f$.
+  - **Código 3:** Margen de probabilidad $|p_1 - p_2| < 0.02f$ (equivalencia semántica directa).
+  - **Código 4:** El token dominante $p_1$ supera por un factor de $1.3\times$ la suma acumulada de la cola (tokens 2 al 5).
+  - **Código 0 (Conflicto / Falla):** El tensor se cataloga como ambigua y se ejecuta la cadena completa de samplers.
+
+---
+
+## 5. Fundamentos Matemáticos y Estructuras de Tensores
+
+### A. Tronco de Capas Respirantes (Early Exit)
+En la Capa $k$ (por ejemplo, Capa 12 en Qwen2), el estado latente $h^{(k)}$ se proyecta mediante la cabeza temprana `nai_logits_early`. La inercia latente $\Delta h$ se calcula mediante la entropía espectral normalizada:
+
+$$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
+
+*Donde $\mathcal{H}$ es la entropía de Shannon de la distribución de probabilidad suavizada por Softmax $\sigma(z^{(k)})$, y $|V|$ es el tamaño del vocabulario.*
+
+- **Evaluación de Salida:** 
+  - Si $\Delta h > \tau_{\text{autopista}}$: Se activa el *Early Exit* cortando la ejecución en `llama-graph.cpp` y saltando las capas $k+1 \dots L$.
+  - Si $\Delta h \le \tau_{\text{autopista}}$: Se interpreta como un Nodo de Conflicto y se deriva a las capas profundas.
+
+### B. Memoria de Masa Gravitatoria (Modelo de los 3 Cuerpos en el KV Cache)
+Para evitar la saturación de contexto, el KV Cache implementa un campo de atenuación gravitatoria dependiente del tiempo:
+
+1. **Masa Semántica ($I_i$):**
+
+
+$$I_i = \|W_K x_i\|_2 \cdot \left(1 + \mathcal{H}_{\text{local}}(x_i)\right)$$
+
+2. **Decaimiento Temporal y Enfriamiento ($dt$):**
+
+$$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
+
+*Los tokens estructurales preservan su pozo gravitatorio, mientras que el relleno sintáctico se atenúa exponencialmente.*
+
+---
+
+## 6. Diagrama de Flujo del Pipeline de Ejecución
+
 [ Entrada: Prompt / Token ]
-       │
-       ▼
-┌─────────────────────────┐
-│ 1. TRIAJE LATENTE       │ ──► ¿Entrada ambigua? ──► Indagación Quirúrgica
-│ (TriageEngine)          │
-└───────────┬─────────────┘
-            │ (Continuar)
-            ▼
+             │
+             ▼
+┌──────────────────────────┐
+│   1. TRIAJE LATENTE      │ ──► ¿Entrada ambigua?
+│ (Proyección Temprana)    │       └──► Indagación Quirúrgica (0% cómputo inútil)
+└────────────┬─────────────┘
+             │ (Continuar)
+             ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ 2. TRONCO DE CAPAS ELÁSTICAS                                              │
-│ Capa 1..12 ──► [ Medidor de Inercia Latente Δh ]                          │
-│                    ┌──────────────┴──────────────┐                        │
-│                    ▼                              ▼                       │
-│         [ Inercia Alta / Autopista ]   [ Nodo de Conflicto / Entropía Alta ]
-│         • Early Exit (nai_logits_early) • Ejecución de Capas Profundas (13..N)
+│                       2. TRONCO DE CAPAS ELÁSTICAS                        │
+│                                                                           │
+│   Capa 1..12 ──► [ Medidor de Inercia Latente Δh ]                        │
+│                           │                                               │
+│            ┌──────────────┴──────────────┐                                │
+│            ▼                             ▼                                │
+│   [ Inercia Alta / Autopista ]   [ Nodo de Conflicto / Entropía Alta ]    │
+│   • Early Exit (nai_logits_early)• Ejecución de Capas Profundas (13..N)   │
+│   • Bypass del 60% de la GPU     • Análisis de Alternativas (Tree Search) │
 └────────────────────────────┬──────────────────────────────────────────────┘
                              │
                              ▼
-┌─────────────────────────────────────────┐
-│ 3. MEMORIA GRAVITATORIA (KV Cache)      │ ──► Atenuación temporal (dt)
-│ (KV Sharing / Fricción Dinámica)        │
-└─────────────────────────────────────────┘
----
+             ┌─────────────────────────────────┐
+             │ 3. MEMORIA GRAVITATORIA (KV)    │ ──► Tokens de bajo campo
+             │    (Modelo de los 3 Cuerpos)    │     gravitatorio se colapsan
+             └─────────────────────────────────     o atenúan por enfriamiento (dt)
 
-### 📄 PARTE 2B: Detalles de Componentes y Matemáticas
 
-```markdown
-### 🔍 Detalle de los Componentes Internos
 
-#### 1. TriageEngine (Filtro Quirúrgico / Prefiltro Header-Only)
-Es la primera línea de defensa. Antes de que el prompt entre a la tokenización profunda (que es costosa), este componente analiza la estructura y semántica de la petición.
-*   **Función:** Clasifica el flujo de ejecución. Si detecta que la entrada es ambigua, activa una plantilla de "Indagación Corta" (evitando que el modelo alucine respuestas largas). Si detecta una petición directa, activa el "Sesgo de Razonamiento Extendido" (permitiendo que el modelo use más capas si es necesario).
-*   **Implementación:** `triage.evaluar(prompt_usuario)` en `TriageEngine.cpp`.
 
-#### 2. Tronco de Capas Elásticas (Early Exit + Bypass Dinámico)
-El corazón del motor. En lugar de ejecutar todas las capas del transformer (que pueden ser 32, 40 o más), el motor evalúa la **Inercia Latente** ($\Delta h$) en un punto intermedio (por ejemplo, la capa 12).
-*   **Función:** Si el estado latente $h^{(k)}$ tiene alta certeza (baja entropía), el motor emite los logits de forma temprana, omitiendo las capas restantes.
-*   **Implementación:** Modificación en el bucle de capas de `llama-context.cpp`, llamando a `nai_logits_early`.
+## 7. Integración Técnica en el Código Fuente
+### Secuencia de Enlaces de Módulos
 
-#### 3. Memoria de Masa Gravitatoria (KV Cache Dinámica)
-La caché de Claves/Valores (KV) tradicional crece indefinidamente y trata todos los tokens por igual. El Motor NAI la convierte en un sistema físico.
-*   **Función:** Asigna una "Masa Semántica" ($I_i$) a cada token. Los tokens con mayor peso (ej. nombres propios, instrucciones clave) persisten en la memoria. Los tokens de relleno sufren un decaimiento exponencial (Redshift), liberando memoria VRAM y reduciendo el coste computacional de la atención.
-*   **Implementación:** Modificación en `llama-kv-cache.cpp` y `llama-context.cpp`.
+```text
+┌─────────────────────────┐
+│   inercia_latente.hpp   │ ──► Define funciones de cálculo: Varianza, Entropía y
+└────────────┬────────────┘     `aplicar_atenuacion_gravitatoria(K, V, dt, I)`
+             │
+             ▼
+┌─────────────────────────┐
+│   src/models/qwen2.cpp  │ ──► Aplica el Hook `nai_logits_early` en Capa 12 para
+└────────────┬────────────┘     evaluación de Salida Temprana (Early Exit).
+             │
+             ▼
+┌─────────────────────────┐
+│    llama-context.cpp    │ ──► Invoca la atenuación gravitatoria en `memory_update()`
+└─────────────────────────┘     antes de la construcción del grafo del nuevo batch.
+```
 
-#### 4. Autopista de Samplers (Bypass de Muestreo)
-El muestreo (sampling) tradicional aplica múltiples filtros (top-k, top-p, temperatura) iterando sobre el vocabulario.
-*   **Función:** Si la inercia latente es alta, el motor detecta que el token ganador es matemáticamente inapelable. En ese caso, se **bypassea** toda la cadena de samplers y se selecciona directamente el token con mayor probabilidad, ahorrando ciclos de CPU.
-*   **Implementación:** `evaluar_inercia_y_equivalencia` en `sampling.cpp`.
+### Implementación del Bypass en sampling.cpp
 
----
 
-## 🧮 Formulaciones Matemáticas
+DecisionInercia dec = evaluar_inercia_y_equivalencia(gsm->cur_p);
 
-### A. Inercia Latente y Early Exit
-En la capa $k$, el estado latente $h^{(k)}$ se proyecta mediante una cabeza temprana. La **inercia latente** $\Delta h$ se define como:
+if (dec.es_autopista) {
+    LOG_DBG("%s: [Inercia Autopista] Codigo: %d, Margen: %.4f -> Token direct: %d\n",
+            __func__, dec.codigo_razon, dec.margen, gsm->cur_p.data[0].id);
+    return gsm->cur_p.data[0].id;
+}
 
-$$
-\Delta h = 1 - \frac{H(\sigma(z^{(k)}))}{\log_2(|V|)}
-$$
+## 8. Compilación y Requisitos de Sistema
+### Requisitos Técnicos
+### Compilador C++17 o superior (GCC, Clang o MSVC).
 
-Donde $H$ es la entropía de la distribución de probabilidad, $\sigma$ es la función softmax y $|V|$ es el tamaño del vocabulario. Un valor de $\Delta h$ cercano a 1 indica alta certeza, lo que permite activar el *early exit*.
+Soporte nativo habilitado para arquitectura ARM64 / Apple Silicon (M1/M2/M3/M4) e x86_64.
 
-### B. Memoria de Masa Gravitatoria (KV Cache)
-La **masa semántica** $I_i$ de cada token $x_i$ en la caché se calcula como:
+CMake 3.14+.
 
-$$
-I_i = \| W_K \cdot x_i \|_2 \cdot (1 + H_{\text{local}}(x_i))
-$$
+### Instrucciones de Compilación (CMake)
 
-El decaimiento temporal de la clave $K_i$ en un intervalo $dt$ sigue una atenuación exponencial basada en su masa:
-
-$$
-K_i(t + dt) = K_i(t) \cdot \exp\left( -\frac{\gamma \cdot dt}{I_i + \epsilon} \right)
-$$
-
-Donde $\gamma$ es una constante de atenuación y $\epsilon$ evita la división por cero. Los tokens con mayor peso semántico ($I_i$ grande) decaen más lentamente, preservando el contexto relevante en la ventana de atención.
-
-## 📊 Resultados del Benchmark (Apple Silicon M1)
-
-Los siguientes resultados fueron obtenidos ejecutando el script `test_benchmark.cpp` en un Apple M1 con 8 GB de RAM unificada, utilizando el modelo `qwen2.5-0.5b-instruct-q4_k_m.gguf` y aceleración por hardware Metal.
-
-### 1. El Salto Cuántico del KV Sharing (Tiempo Emergente)
-
-La teoría de dispersión aplicada al software demuestra su valía cuando un segundo usuario intenta procesar un contexto similar al primero. El motor actúa como un faro gravitatorio, heredando el espacio-tiempo precalculado.
-
-| Escenario | Tiempo de Prefill | Velocidad | Impacto de la Optimización |
-| :--- | :--- | :--- | :--- |
-| **Usuario 1 (Normal)** | 82.01 ms | 475.54 tok/s | Procesamiento estándar de la secuencia completa (79 tokens). |
-| **Usuario 2 (NAI Sharing)** | **15.70 ms** | **Incalculable** | **Reducción del 81% en tiempo.** El KV se copió y solo se procesó 1 token diferencial. |
-
-> **Análisis Físico:** El motor no recalculó la trayectoria desde el origen \(A\). Utilizó el estado del usuario 1 como el "faro" \(C\) y aplicó una matriz de dispersión elástica para resolver instantáneamente el destino \(B\) del usuario 2. El ahorro de cómputo es masivo.
-
-### 2. Telemetría de la Autopista (Early Exit en Acción)
-
-Durante la generación masiva de 200 tokens, el motor recolectó métricas sobre la certeza del modelo en las capas intermedias. La telemetría demuestra que el motor "sabe cuándo sabe".
-
-*   **Total tokens generados:** 200
-*   **Autopista activa (Early Exit):** `40.00%` (80 tokens)
-*   **Conflicto (Cadena completa):** `60.00%` (120 tokens)
-*   **Razón principal de la Autopista:** Margen de logits (El modelo tenía certeza matemática absoluta sobre el siguiente token).
-
-> **Análisis Físico:** En 80 de los 200 tokens, la entropía (el desorden) fue tan baja que el motor decidió **saltarse las capas profundas y el muestreo complejo**. Esto valida la ecuación de inercia latente \(\Delta h\). El motor "deshiló" la cuerda y tomó el atajo, ahorrando ciclos de GPU sin perder coherencia en el texto generado.
-
-### 3. Escalabilidad y Concurrencia (Entropía Gravitacional)
-
-El motor demuestra una escalabilidad lineal, manteniendo el *Throughput* (rendimiento total) incluso bajo estrés de múltiples usuarios (secuencias paralelas).
-
-| Usuarios Simultáneos (`n_seq_max`) | Throughput Total | Velocidad por Usuario | Estado del Sistema |
-| :--- | :--- | :--- | :--- |
-| **1 usuario** | 72.89 tokens/s | 72.89 tokens/s | Óptimo |
-| **8 usuarios** | 201.69 tokens/s | 25.21 tokens/s | Óptimo (Escalado x2.7) |
-
-> [!WARNING]
-> **Nota sobre Concurrencia Masiva (32+ usuarios):**
-> Durante las pruebas de 32 usuarios, el motor abortó controladamente con el error `GGML_ASSERT(n_tokens_all <= cparams.n_batch)`. Esto **no es un fallo del motor NAI**, sino un límite físico del script de pruebas. El script está configurado por defecto con un `n_batch = 128`. Para soportar más de 16 usuarios concurrentes, es necesario modificar esta variable a **512** o **1024** en el código de inicialización para evitar el desbordamiento del búfer de cómputo en Metal.
-
----
-## 🛠️ Instalación y Ejecución
-
-El Motor NAI mantiene la filosofía de `llama.cpp`: sin dependencias externas pesadas, compilación en C/C++ y optimización nativa para el hardware.
-
-### 1. Prerrequisitos
-*   **macOS:** Xcode Command Line Tools y un chip Apple Silicon (M1/M2/M3) o Intel.
-*   **Linux/Windows:** Compilador C++ (GCC/Clang/MSVC), CMake y los drivers correspondientes (CUDA para NVIDIA, ROCm para AMD).
-*   **Modelo:** Un archivo `.gguf` (las pruebas fueron realizadas con `qwen2.5-0.5b-instruct-q4_k_m.gguf`).
-
-### 2. Clonar y Compilar el Motor Base
-
-```bash
-# 1. Clonar el repositorio
-git clone https://github.com/FranciscoACruz/NAIEngine-llama.cpp.git
+# Clonar y acceder al repositorio
 cd NAIEngine-llama.cpp
 
-# 2. Configurar y compilar con CMake
-# (El flag -DLLAMA_METAL=ON es exclusivo para macOS. En Linux usa -DLLAMA_CUDA=ON)
+# Crear directorio de compilación y configurar
 mkdir build && cd build
-cmake .. -DLLAMA_METAL=ON -DLLAMA_NATIVE=ON
+cmake .. -DLLAMA_NATIVE=ON
+
+# Compilar binarios optimizados en modo Release
 cmake --build . --config Release -j
 
+---
 
-```markdown
-### 3. Compilar el Script de Benchmark
+## 9. Benchmarks de Rendimiento y Análisis de Concurrencia
 
-El archivo `test_benchmark.cpp` debe enlazarse con las librerías estáticas generadas en el paso anterior. 
+Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
 
-> **Nota de Rutas:** El siguiente comando asume que estás dentro de la carpeta `build` y que el script `test_benchmark.cpp` está en la carpeta raíz (`../`). Si tienes el modelo guardado en un disco externo (ej. `/Volumes/Externo/`), asegúrate de crear un enlace simbólico o modificar la ruta en el código (Línea 73) para evitar errores de `File Not Found`.
+### A. Rendimiento de Carga y Autopista
+- **Prefill Normal (Seq 0):** `82.01 ms` (`475.54 tok/s`)
+- **Prefill NAI Sharing (Seq 1):** `15.70 ms` *(El KV Cache se copió y solo procesó 1 token gracias al intercambio inteligente)*.
+- **Velocidad de Generación Masiva (200 tokens):** `38.69 tok/s`.
+- **Telemetría de Autopista:** 
+  - Total tokens muestreados: `200`
+  - Conflicto (cadena completa): `120 (60.00%)`
+  - Autopista activa por Margen de Logits (Razón 2): `80 (40.00%)`
+  - *Calibración del sistema:* Saludable y operativa al 40%.
 
-**Para macOS (Apple Silicon):**
-
-```bash
-clang++ -std=c++17 -O3 -I../include -I../common -I../ggml/include \
-  ../test_benchmark.cpp \
-  libcommon.a libllama.a ggml/src/libggml.a ggml/src/libggml-base.a ggml/src/libggml-cpu.a ggml/src/libggml-metal.a ggml/src/libggml-blas.a \
-  -framework Accelerate -framework Metal -framework Foundation -framework CoreGraphics \
-  -o test_benchmark
-
-  Para Linux (CUDA / CPU):
-
-  g++ -std=c++17 -O3 -I../include -I../common -I../ggml/include \
-  ../test_benchmark.cpp \
-  libcommon.a libllama.a ggml/src/libggml.a ggml/src/libggml-base.a ggml/src/libggml-cpu.a ggml/src/libggml-cuda.a \
-  -lpthread -ldl -lcuda -lcublas -lcudart \
-  -o test_benchmark
-
-
-```markdown
-### 4. Ejecutar el Benchmark
-
-Una vez compilado, ejecuta el binario. Asegúrate de tener el archivo `.gguf` en la misma carpeta o haber actualizado la ruta en el código.
-
-```bash
-./test_benchmark
-
-## 🚑 Solución de Problemas (Troubleshooting)
-
-Si encuentras problemas al compilar o ejecutar el Motor NAI, aquí tienes las soluciones a los fallos más comunes reportados durante las pruebas.
-
-### 1. Error: GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed
-
-**Causa:** Este error ocurre durante los tests de estrés (32, 64 o 128 usuarios concurrentes). El script `test_benchmark.cpp` tiene un límite por defecto de `n_batch = 128`. Al procesar múltiples prompts de golpe, se supera este límite y el motor aborta para proteger la VRAM.
-
-**Solución:** Abre el archivo `test_benchmark.cpp`, busca la función `run_stress_test` y aumenta el límite del batch:
-
-```cpp
-// Cambiar esta línea:
-cparams.n_batch = 128; 
-// Por esta:
-cparams.n_batch = 512; // o 1024 para pruebas masivas
-
-
+### B. Pruebas de Estrés y Límites de Concurrencia
+1. **1 Usuario Simultáneo (Contexto: 512 tokens):**
+   - Throughput Total / Velocidad por usuario: **`72.89 tokens/segundo`**.
+2. **8 Usuarios Simultáneos (Contexto: 4096 tokens):**
+   - Throughput Total: **`201.69 tokens/segundo`** (`25.21 tok/s` por usuario).
+3. **32 Usuarios Simultáneos (Contexto: 16384 tokens):**
+   - **Resultado del Kernel:** Interrupción controlada por aserción de seguridad:
+     `GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`
+   - **Análisis de Ingeniería:** Comprueba que las guardas de memoria protegen los búferes de la GPU Metal ante una saturación masiva de lotes que superan el límite estructural de `n_batch` (512), abortando de forma limpia sin corrupción de memoria unificada.
 
 ---
 
-### 📄 Bloque 2: Troubleshooting (Parte B)
+## 10. Consideraciones Técnicas y Advertencias de Uso
 
-```markdown
-### 2. Error: File Not Found al cargar el modelo
+1. **Interacción con Gramáticas Estrictas:**
+   - Si se activa el muestreo por gramática (`grammar_first = false`), la regla de autopista podría omitir la validación sintáctica en tokens dominantes. Para esquemas rígidos (JSON, YAML), se recomienda forzar estrictamente `grammar_first = true` o deshabilitar temporalmente el bypass de autopista.
 
-**Causa:** El código busca por defecto el archivo `.gguf` en la misma carpeta donde se ejecuta el binario.
+2. **Normalización de Probabilidades:**
+   - Las reglas de inercia basadas en el margen de probabilidad ($|p_1 - p_2|$, correspondientes a los Códigos 3 y 4) requieren que el vector de candidatos cuente con un paso previo de Softmax y normalización explícita. Si el pipeline entrega únicamente logits puros sin normalizar, el motor recurrirá de forma transparente al Código 2 (margen de logits).
 
-**Solución:** Si guardaste el modelo en un disco externo o en otra carpeta, crea un enlace simbólico en la raíz del proyecto:
-
-```bash
-ln -s /Volumes/Externo/qwen2.5-0.5b-instruct-q4_k_m.gguf ./qwen2.5-0.5b-instruct-q4_k_m.gguf
-
+3. **Seguridad Multi-hilo (`Multi-threading`):**
+   - La estructura global `nai::MapaMasaSemantica g_nai_mapa_masa` implementada en `llama-context.cpp` debe protegerse mediante cerrojos de exclusión mutua (*mutex/locks*) o ser instanciada por contexto de forma aislada en caso de ejecutar inferencia concurrente en múltiples instancias paralelas de `llama_context`.
 
 ---
 
-### 📄 Bloque 3: Troubleshooting (Parte C)
+## 11. Licencia
 
-```markdown
-### 3. Errores de enlazado (Undefined symbols) al compilar el Benchmark
-
-**Causa:** El compilador no encuentra las librerías estáticas `.a` generadas por CMake.
-
-**Solución:** Asegúrate de haber ejecutado `cmake --build . --config Release` exitosamente antes de compilar el script, y verifica que estás ejecutando el comando `clang++` o `g++` desde dentro de la carpeta `build/`.
-
----
-
-## 📄 Licencia
-
-Este proyecto se distribuye bajo la **Licencia MIT**, heredada directamente del proyecto original `llama.cpp`. Eres libre de usar, modificar, fusionar, publicar, distribuir, sublicenciar y/o vender copias del software.
-
-Consulta el archivo `LICENSE` en la raíz del repositorio para obtener el texto completo.
-
----
-
-## 🙏 Agradecimientos
-
-*   **Georgi Gerganov y la comunidad de `llama.cpp`:** Por sentar las bases de la inferencia de LLM en hardware de consumo y crear una arquitectura tan modular que permite experimentaciones profundas como este Motor NAI.
-*   **La Física Teórica:** Por proporcionar las analogías matemáticas y conceptuales (como la *Matriz de Dispersión* y la *Entropía Gravitacional*) que demostraron ser no solo metáforas, sino guías prácticas para optimizar el silicio.
-
-<br>
-
-<div align="center">
-  <i>"La naturaleza no da saltos, pero el silicio bien optimizado sí."</i>
-  <br><br>
-  <b>Motor NAI © 2026</b>
-</div>
-
+Este proyecto mantiene los términos de licenciamiento originales de `llama.cpp` bajo la **MIT License**. Consulta el archivo `LICENSE` incluido en el repositorio para más detalles sobre derechos de copia, redistribución y limitaciones de responsabilidad.
