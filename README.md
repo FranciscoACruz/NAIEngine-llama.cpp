@@ -395,7 +395,7 @@ Para formalizar la transición de estados y la interacción gravitacional en el 
 
 $$\left| \psi_{\text{salida}} \right\rangle = \hat{S}_{\text{grav}} \left( \sum_{j=1}^{N} \frac{G \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^2} \right) \left| \psi_{\text{entrada}} \right\rangle$$
 
-Donde la fuerza de interacción gravitacional efectiva $\mathbf{F}_{ij}$ que experimenta el token $i$ respecto al token circundante $j$ en el espacio latente está dada por:
+Donde la fuerza de interacción gravitacional efectiva $$ \mathbf{F}_{ij} $$ que experimenta el token $i$ respecto al token circundante $j$ en el espacio latente está dada por:
 
 $$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^3} (\mathbf{r}_i - \mathbf{r}_j) - \eta \cdot \mathbf{v}_i$$
 
