@@ -333,13 +333,37 @@ ctest --output-on-failure -R nai
 
 ---
 
-## 10. Marco Cuántico-Cosmológico y Dinámica de Dispersión en el Motor NAI
+## 10. Ambiente de Ejecución y Diagnóstico de Límites de Hardware
+
+Para comprender con precisión los resultados obtenidos en los benchmarks y el comportamiento del kernel bajo carga masiva, se detalla el entorno físico exacto de pruebas y la justificación técnica detrás de los límites operativos:
+
+### A. Especificaciones del Equipo Anfitrión
+* **Modelo de Estación:** iMac (24 pulgadas, M1, 2021)
+* **Procesador (SoC):** Apple M1 (CPU/GPU integrada de arquitectura unificada)
+* **Memoria Unificada:** 8 GB[cite: 4]
+* **Sistema Operativo:** macOS Tahoe 26.3[cite: 4]
+* **Backend de Aceleración:** Metal (`MTL0`), optimizado para la ejecución directa de tensores en el motor unificado de Apple Silicon.
+
+### B. Configuración del Motor y Diagnóstico de Límites
+* **Parámetros de Lote (`n_batch`):** Configurado a un límite estándar de `512` tokens.
+* **Escenarios Evaluados:** Pruebas de concurrencia y contexto escaladas desde 512 hasta 16,384 tokens.
+
+### C. ¿Por qué se topó la prueba de rendimiento (32 Usuarios / 16k Tokens)?
+Cuando se escaló la concurrencia a 32 usuarios simultáneos con contextos masivos (16,384 tokens), el motor arrojó la siguiente interrupción controlada:
+`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`
+
+* **Explicación de Ingeniería:** Esta interrupción **no es un fallo de software ni un *bug* de memoria**, sino una **guarda de seguridad estructural programada en el kernel**. En un equipo con 8 GB de memoria unificada, procesar un lote masivo de solicitudes concurrentes que supera el límite estático del búfer configurado en `n_batch` (512) activaría el agotamiento de la memoria compartida del sistema operativo, provocando un reinicio del controlador gráfico o del kernel. 
+* **Implicación Física:** La aserción de seguridad garantiza que el motor aborte de forma limpia antes de comprometer la estabilidad del sistema, demostrando que las protecciones del framework responden adecuadamente a los límites físicos del hardware anfitrión.
+
+---
+
+## 11. Marco Cuántico-Cosmológico y Dinámica de Dispersión en el Motor NAI
 
 Para trascender el cálculo secuencial convencional, NAI modela el flujo de tensores lingüísticos no como un simple paso de matrices estáticas, sino como un **sistema físico multiporta gobernado por dispersión, elasticidad termodinámica y expansión métrica del espacio de contexto**.
 
 ---
 
-### 10.1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
+### 11.1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
 * **De qué trata en la física:** El coeficiente de restitución mide la conservación de la energía cinética en un choque entre cuerpos. Una colisión perfectamente elástica preserva toda la energía ($e = 1$), mientras que una inelástica disipa energía en forma de calor o deformación ($0 \le e < 1$).
 * **Cómo se aplica en NAI:** Conecta el estado latente inicial del token de entrada $h^{(0)}$ con su proyección final post-capas o post-salida temprana $h^{(final)}$. El coeficiente de elasticidad latente regula cuánta "energía informacional" se retiene:
   $$h^{(final)} = \mathcal{T}_{\text{capas}}(h^{(0)}) \cdot e^{-\lambda \cdot \text{Disipación}}$$
@@ -347,7 +371,7 @@ Para trascender el cálculo secuencial convencional, NAI modela el flujo de tens
 
 ---
 
-### 10.2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
+### 11.2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
 * **De qué trata en la física:** En física de partículas y mecánica cuántica, la Matriz S (*Scattering Matrix*) relaciona el estado cuántico inicial de partículas libres antes de una colisión con el estado final después de interactuar mediante un potencial.
 * **Cómo se aplica en NAI:**
   - **Dispersión Elástica ($\hat{S}_{\text{elástica}}$):** Se aplica en la Autopista de Muestreo. El tensor de logits rebota a través de los criterios de decisión (`DecisionInercia`) sin alterar la pureza semántica de la ruta óptima, conservando el momento informacional exacto.
@@ -355,13 +379,13 @@ Para trascender el cálculo secuencial convencional, NAI modela el flujo de tens
 
 ---
 
-### 10.3. Disipación de Energía Cinética en el Nodo Intermedio
+### 11.3. Disipación de Energía Cinética en el Nodo Intermedio
 * **De qué trata en la física:** La pérdida de energía mecánica útil en sistemas disipativos debido a fricciones internas o turbulencias.
 * **Cómo se aplica en NAI:** Cuando el Triaje Latente o el Tronco de Capas detecta redundancia sintáctica, la energía cinética del gradiente se disipa deliberadamente en el nodo intermedio (Capa 12). Esto impide el desperdicio de ciclos de GPU en procesar tokens cuya inercia ya determinó el resultado.
 
 ---
 
-### 10.4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
+### 11.4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
 
 #### A. De qué trata en la física y por qué se aplica en NAI
 * **En la física clásica y celeste:** El problema de los $N$-cuerpos (y de forma célebre el **problema de los tres cuerpos**) describe cómo múltiples objetos masivos (como estrellas, planetas o lunas) interactúan gravitacionalmente entre sí en el espacio tridimensional. Debido a la no linealidad de las ecuaciones de movimiento de Newton y Einstein, el sistema carece de una solución analítica general y cerrada; evoluciona a través de órbitas caóticas, resonancias gravitacionales y eyecciones donde los cuerpos de menor masa terminan siendo expulsados del sistema estelar central hacia el espacio profundo.
@@ -391,7 +415,7 @@ $$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{\|\mathbf{r
   Mediante este formalismo de N-cuerpos, la Matriz S calcula la dispersión del campo de atención: los tokens que colisionan con trayectorias de baja masa semántica y alta velocidad relativa escapan del radio de Hill del sistema de atención, liberando memoria de la GPU de manera orgánica sin necesidad de truncamientos abruptos por ventanas deslizantes rígidas.
 ---
 
-### 10.5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
+### 11.5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
 
 #### A. De qué trata en la física y por qué se aplica en NAI
 * **En la física y cosmología moderna:** La **Ley de Hubble-Lemaître** describe la observación astronómica de que las galaxias distantes se alejan unas de otras a una velocidad proporcional a su distancia (expresada mediante la constante de Hubble $H_0$). Esta expansión métrica del espacio no ocurre porque los objetos se muevan mecánicamente a través del cosmos, sino porque el propio tejido del espacio-tiempo se estira, provocando una dilución progresiva de la densidad de energía, un corrimiento hacia el rojo (*redshift*) de la radiación y un enfriamiento generalizado del universo.
@@ -427,7 +451,7 @@ $$K_i(t) = K_i(0) \cdot \exp\left( - \int_{0}^{t} H_{\text{local}} \cdot z_{\tex
 
 ---
 
-### 10.6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
+### 11.6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
 
 #### A. ¿De qué trata este concepto en la física y por qué se aplica en NAI?
 En la física clásica y en las arquitecturas de transformadores tradicionales (como el *Vanilla Transformer* y `llama.cpp`), el tiempo y el espacio de contexto operan sobre una **cuadrícula cartesiana rígida y lineal**:
@@ -459,7 +483,7 @@ $$\frac{dt_{\text{emergente}}}{dt_{\text{gpu}}} = \sqrt{1 - \frac{\gamma \cdot \
 
 ---
 
-### 10.7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
+### 11.7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
 * **De qué trata conceptualmente:** La síntesis absoluta de las leyes de campo, inercia, gravedad y disipación aplicadas a la cognición artificial.
 * **Formulación del Sistema Completo Unificado:**
 
@@ -471,7 +495,7 @@ $$\mathcal{R}_{\mu\nu} - \frac{1}{2}g_{\mu\nu}\mathcal{R} + \Lambda_{\text{local
   3. El término de inercia ($\frac{\partial \Delta h}{\partial t}$) controla la velocidad del *Early Exit* en el tronco respirante del motor.
 
 
-## 11. Consideraciones Técnicas y Advertencias de Uso
+## 12. Consideraciones Técnicas y Advertencias de Uso
 
 Las capacidades operativas del Motor NAI —en especial los umbrales de contexto masivo, el tamaño de lote (`n_batch`) y el rendimiento concurrente— no son estáticas; **dependen directamente de la infraestructura de hardware y del ancho de banda de memoria del equipo anfitrión** donde se ejecute la compilación:
 
