@@ -478,6 +478,8 @@ Las capacidades operativas del Motor NAI —en especial los umbrales de contexto
 
 ---
 
+<br><br><br><br>
+
 ## 13 Ámbitos de Aplicación y Evolución Transversal del Ecosistema
 
 La arquitectura de física computacional, inercia, campos gravitatorios y menor acción energética —ideada, conceptualizada y desarrollada íntegramente por **Ángelus Tenshi (Francisco Alejandro Cruz Castro)**— tiene su raíz fundamental en **Aperion Engine** y su evolución hacia la inteligencia artificial con el **Motor NAI**, estableciendo un nuevo paradigma que abarca múltiples ramas tecnológicas:
