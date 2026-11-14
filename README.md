@@ -62,13 +62,7 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 
 
 ---
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 4. Desglose Exhaustivo de Capas del Pipeline y Subsistemas
 
@@ -100,13 +94,7 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
   - **Código 0 (Conflicto / Falla):** El tensor se cataloga como ambigua y se ejecuta la cadena completa de samplers.
 
 ---
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 5. Fundamentos Matemáticos y Estructuras de Tensores
 
@@ -162,13 +150,7 @@ $$K_i(t + dt) = K_i(0) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
   - Los tokens estructurales y de alta relevancia ($I_i \gg 0$) preservan su pozo gravitatorio y su inercia de atención de manera indefinida.
   - El relleno sintáctico o de baja relevancia ($I_i \to 0$) sufre un enfriamiento exponencial acelerado, purgándose de la memoria de la GPU de manera orgánica y manteniendo la atención limpia y libre de ruido en contextos masivos.
 ---
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 6. Diagrama de Flujo del Pipeline de Ejecución
 ```text
@@ -200,14 +182,7 @@ $$K_i(t + dt) = K_i(0) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
              └─────────────────────────────────     o atenúan por enfriamiento (dt)
 
 ```
-
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 7. Integración Técnica en el Código Fuente
 ### Secuencia de Enlaces de Módulos
@@ -238,14 +213,7 @@ if (dec.es_autopista) {
     return gsm->cur_p.data[0].id;
 }
 ```
-
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 8. Compilación y Requisitos de Sistema
 ### Requisitos Técnicos
@@ -258,28 +226,23 @@ CMake 3.14+.
 ### Instrucciones de Compilación (CMake)
 
 #### Clonar y acceder al repositorio
-```text
+```cpp
 cd NAIEngine-llama.cpp
 ```
 
 #### Crear directorio de compilación y configurar
-```text
+```cpp
 mkdir build && cd build
 cmake .. -DLLAMA_NATIVE=ON
 ```
 
 #### Compilar binarios optimizados en modo Release
+```cpp
 cmake --build . --config Release -j
+```
 
 ---
-
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 9. Benchmarks de Rendimiento y Análisis de Concurrencia
 
@@ -326,6 +289,7 @@ ctest --output-on-failure -R nai
 
 
 ---
+<br><br><br><br>
 
 ## 10. Ambiente de Ejecución y Diagnóstico de Límites de Hardware
 
@@ -350,6 +314,7 @@ Cuando se escaló la concurrencia a 32 usuarios simultáneos con contextos masiv
 * **Implicación Física:** La aserción de seguridad garantiza que el motor aborte de forma limpia antes de comprometer la estabilidad del sistema, demostrando que las protecciones del framework responden adecuadamente a los límites físicos del hardware anfitrión.
 
 ---
+<br><br><br><br>
 
 ## 11. Marco Cuántico-Cosmológico y Dinámica de Dispersión en el Motor NAI
 
@@ -510,14 +475,7 @@ Las capacidades operativas del Motor NAI —en especial los umbrales de contexto
    - Se recomienda calibrar el parámetro `n_batch` en función de los núcleos de procesamiento y el paralelismo de hilos del procesador host para evitar cuellos de botella durante el cálculo de la inercia latente y la matriz de dispersión.
 
 ---
-
-
-
-
-
-
-
-
+<br><br><br><br>
 
 ## 11. Licencia
 
