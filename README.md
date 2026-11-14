@@ -141,7 +141,7 @@ Para resolver esto, nos inspiramos en un principio astrofísico fundamental: *¿
 
 Al trasladar esto al dominio de los tensores de lenguaje, concluimos que un token no debe tener un peso estático, sino una **masa semántica intrínseca ($I_i$)** compuesta por dos fuerzas fundamentales:
 - **La Intensidad Proyectada de la Clave ($\|W_K x_i\|_2$):** Mide la energía intrínseca y la magnitud geométrica del vector clave en el espacio latente. Un token que representa una regla de código o una definición clave tiene una norma vectorial marcadamente superior al ruido conversacional.
-- **La Entropía Local de Contexto ($$\mathcal{H}_{\text{local}}(x_i)$$):** Cuantifica la densidad de información y la incertidumbre sintáctica del entorno inmediato del token.
+- **La Entropía Local de Contexto ($$ \mathcal{H}_{\text{local}}(x_i)$$ ):** Cuantifica la densidad de información y la incertidumbre sintáctica del entorno inmediato del token.
 
 Multiplicando ambos factores, definimos formalmente la **Masa Semántica ($I_i$)**:
 
