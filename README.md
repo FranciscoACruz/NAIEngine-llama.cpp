@@ -478,6 +478,33 @@ Las capacidades operativas del Motor NAI —en especial los umbrales de contexto
 ---
 <br><br><br><br>
 
-## 11. Licencia
+
+
+---
+
+## 11. Referencias Bibliográficas y Fundamentos Teóricos
+
+Las bases arquitectónicas, matemáticas y físicas del **Motor NAI** se sustentan en los siguientes trabajos seminales de investigación científica, teoría de la información y mecánica estadística, complementados con la autoría, conceptualización y desarrollo original de los caminos físicos del framework:
+
+1. **Arquitectura Transformer Fundacional:**
+   * Vaswani, A., et al. (2017). *Attention Is All You Need*. Advances in Neural Information Processing Systems (NeurIPS 2017). (Referencia base para el mecanismo de autoatención estándar y su análisis de limitaciones estructurales).
+
+2. **Teoría de la Información y Entropía Espectral:**
+   * Shannon, C. E. (1948). *A Mathematical Theory of Communication*. Bell System Technical Journal, 27(3), 379–423. (Fundamento matemático aplicado en el cálculo de la entropía local y las capas respirantes del motor).
+
+3. **Mecánica Celeste y Sistemas de N-Cuerpos:**
+   * Poincare, H. (1890). *Sur le problème des trois corps et les équations de la dynamique*. Acta Mathematica, 13, 1–270. (Base teórica adaptada para el modelado dinámico y la dispersión gravitacional en el KV Cache).
+
+4. **Cosmología y Expansión Métrica:**
+   * Hubble, E. (1929). *A Relation between Distance and Radial Velocity among Extra-Galactic Nebulae*. Proceedings of the National Academy of Sciences, 15(3), 168–173. (Principio físico análogo aplicado a la expansión métrica del espacio de contexto masivo).
+
+5. **Autoría, Conceptualización Teórica y Desarrollo Original del Framework:**
+   * **Ángelus Tenshi (Francisco Alejandro Cruz Castro).** *NAI Engine: High-Performance LLM Framework via Physics-Based Principles and Llama.cpp Optimization* (2026). 
+     * **Aportación Conceptual y Derivación Teórica Original:** La formulación, diseño y reinterpretación de los caminos físicos aplicados a la cognición artificial bajo este framework —incluyendo el modelado del *Problema de los Tres Cuerpos* y la *Matriz S de Dispersión Gravitacional ($\hat{S}_{\text{grav}}$)* en el KV Cache, la deducción de la *Masa Semántica Intrínseca ($I_i$)*, la inserción de la *Fuerza de Hubble y Expansión Cosmológica del Contexto*, el establecimiento del *Espacio-Tiempo No Cartesiano con Posición y Tiempo Emergentes*, y la síntesis de la *Ecuación Maestra del Universo unificada (NAI Unified Master Equation)*— representan un desarrollo de investigación independiente y original. Partiendo de escritos y principios de la física teórica y la termodinámica, se abrieron caminos alternativos y formulaciones matemáticas inéditas para resolver de raíz los cuellos de botella estructurales de los Transformers tradicionales, traduciendo la mecánica celeste y de campos a código ejecutable de ultra-alto rendimiento sobre `llama.cpp`.
+<br><br><br><br>
+
+
+
+## 12. Licencia
 
 Este proyecto mantiene los términos de licenciamiento originales de `llama.cpp` bajo la **MIT License**. Consulta el archivo `LICENSE` incluido en el repositorio para más detalles sobre derechos de copia, redistribución y limitaciones de responsabilidad.
