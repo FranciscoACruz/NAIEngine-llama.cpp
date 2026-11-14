@@ -115,7 +115,7 @@ En la Capa $k$ (por ejemplo, Capa 12 en Qwen2), el estado latente $h^{(k)}$ se p
 
 $$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
 
-*Donde $$ \mathcal{H} $$ es la entropía de Shannon de la distribución de probabilidad suavizada por Softmax $$ \sigma(z^{(k)}) $$, y $$ |V| $$ es el tamaño del vocabulario.*
+Donde $\mathcal{H}$ es la entropía de Shannon de la distribución de probabilidad suavizada por Softmax $\sigma(z^{(k)})$, y $|V|$ es el tamaño del vocabulario.
 
 - **Evaluación de Salida:** 
   - Si $\Delta h > \tau_{\text{autopista}}$: Se activa el *Early Exit* cortando la ejecución en `llama-graph.cpp` y saltando las capas $k+1 \dots L$.
