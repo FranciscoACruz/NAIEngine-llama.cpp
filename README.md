@@ -232,13 +232,13 @@ cd NAIEngine-llama.cpp
 ```
 
 #### Crear directorio de compilación y configurar
-```cpp
+```console
 mkdir build && cd build
 cmake .. -DLLAMA_NATIVE=ON
 ```
 
 #### Compilar binarios optimizados en modo Release
-```cpp
+```console
 cmake --build . --config Release -j
 ```
 
@@ -256,12 +256,12 @@ Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
 cd build
 
 ##### Ejecutar todas las pruebas unitarias del motor NAI (Inercia, Triaje y KV Cache)
-```cpp
+```console
 ctest --output-on-failure -R nai
 ```
 
 ##### O bien, ejecutar de forma directa el binario de validación de inercia y muestreo
-```cpp
+```console
 ./bin/test-nai-sampling --vocab-model ../models/qwen2/ggml-model.gguf
 ```
 
