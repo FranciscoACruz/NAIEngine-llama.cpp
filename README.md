@@ -480,8 +480,6 @@ Las capacidades operativas del Motor NAI —en especial los umbrales de contexto
 
 
 
----
-
 ## 11. Referencias Bibliográficas y Fundamentos Teóricos
 
 Las bases arquitectónicas, matemáticas y físicas del **Motor NAI** se sustentan en los siguientes trabajos seminales de investigación científica, teoría de la información y mecánica estadística, complementados con la autoría, conceptualización y desarrollo original de los caminos físicos del framework:
