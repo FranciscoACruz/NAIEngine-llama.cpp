@@ -21,9 +21,7 @@ Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada toke
 | **Persistencia de Sesión** | Sesiones volátiles ligadas al ciclo de vida bruto del contexto de ejecución. | Ciclo de vida biológico de **24 horas por usuario**, garantizando continuidad conversacional. | Persistencia transaccional robusta sin pérdida de estado lógico. |
 
 ---
-
-
-
+<br><br><br><br>
 
 
 
@@ -329,7 +327,6 @@ ctest --output-on-failure -R nai
      `GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`
    - **Análisis de Ingeniería:** Comprueba que las guardas de memoria protegen los búferes de la GPU Metal ante una saturación masiva de lotes que superan el límite estructural de `n_batch` (512), abortando de forma limpia sin corrupción de memoria unificada.
 
----
 
 ---
 
