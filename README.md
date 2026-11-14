@@ -131,6 +131,7 @@ $$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
 ### B. Memoria de Masa Gravitatoria (Modelo de los 3 Cuerpos en el KV Cache)
 
 #### 1. El Problema Raíz en los Transformers Tradicionales
+***(Nota: Revisar el documento creado por investigadores de Google llamado «Attention Is All You Need»,)***
 En las arquitecturas estándar (como el *Vanilla Attention* de `llama.cpp`), el mecanismo de atención calcula la matriz de pesos mediante la similitud de producto punto escalado:
 
 $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
