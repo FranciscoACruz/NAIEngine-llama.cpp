@@ -255,12 +255,12 @@ Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
 cd build
 
 ##### Ejecutar todas las pruebas unitarias del motor NAI (Inercia, Triaje y KV Cache)
-```text
+```cpp
 ctest --output-on-failure -R nai
 ```
 
 ##### O bien, ejecutar de forma directa el binario de validación de inercia y muestreo
-```text
+```cpp
 ./bin/test-nai-sampling --vocab-model ../models/qwen2/ggml-model.gguf
 ```
 
