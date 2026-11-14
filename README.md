@@ -130,6 +130,8 @@ En las arquitecturas de LLMs convencionales (como el *Vanilla Attention* de `lla
 
 $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
 
+
+
 - **La Falla Estructural (Neutralizada por NAI):** Este enfoque tradicional trata el historial conversacional como un conjunto de vectores planos e isotrópicos donde el peso de cada token depende exclusivamente de su proximidad sintáctica superficial respecto al *Query* actual. A medida que el contexto crece por encima de los 32k tokens, un modelo estándar sufre de **saturación entrópica** (*lost in the middle*), donde el ruido de relleno, las repeticiones y las transiciones conversacionales triviales compiten con idéntica "presión de atención" frente a las instrucciones críticas o variables de código, colapsando la memoria de la GPU y degradando la coherencia a largo plazo. **El Motor NAI neutraliza de raíz esta deficiencia** al sustituir la atención plana por el Campo Gravitatorio de Tres Cuerpos y la Masa Semántica ($I_i$).
 
 ---
