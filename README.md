@@ -8,7 +8,8 @@ El **Motor NAI** no surge de una optimización sintáctica tradicional dentro de
 
 Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada token gasta idéntica energía computacional y la memoria de contexto se degrada por saturación lineal—, NAI introduce un paradigma donde los tensores fluyen siguiendo trayectorias de menor resistencia, dando paso a un sistema apto no solo para software de alto rendimiento, sino como base conceptual para futuros desarrollos de hardware neuromórfico y computación acelerada.
 
----
+
+<br><br><br><br>
 
 ## 1. Comparativa Estructural: Llama.cpp Vanilla vs. Motor NAI
 
@@ -19,7 +20,7 @@ Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada toke
 | **Subsistema de Muestreo** | Evaluación iterativa pesada y secuencial de toda la cadena de samplers en cada paso. | Bypass de Autopista mediante métricas de inercia (`DecisionInercia`). | Omisión de samplers pesados en más del **40% de los tokens**, acelerando la inferencia. |
 | **Persistencia de Sesión** | Sesiones volátiles ligadas al ciclo de vida bruto del contexto de ejecución. | Ciclo de vida biológico de **24 horas por usuario**, garantizando continuidad conversacional. | Persistencia transaccional robusta sin pérdida de estado lógico. |
 
----
+
 <br><br><br><br>
 
 
@@ -226,7 +227,7 @@ CMake 3.14+.
 ### Instrucciones de Compilación (CMake)
 
 #### Clonar y acceder al repositorio
-```cpp
+```console
 cd NAIEngine-llama.cpp
 ```
 
