@@ -14,6 +14,11 @@
 #
 # Genera una tabla Markdown lista para pegar en el README y, opcionalmente, un JSON.
 #
+# Ruido: cada ronda levanta todas las variantes en orden ROTADO (ninguna corre siempre primero,
+# con la máquina más fresca) y se reportan MEDIANAS y el costo en ms/token, comparable entre
+# máquinas. Con --server-oficial se agrega el llama-server del llama.cpp oficial como variante,
+# para medir el costo de NAI con todas sus funciones apagadas.
+#
 # Modo carga mixta (calibración del planificador):
 #   python3 tools/nai/nai_bench.py -m modelo.gguf --carga-mixta 120 --slots 8 --ctx 32768
 # Lanza peticiones concurrentes con la misma distribución que el simulador (cortas y complejas,
@@ -60,11 +65,12 @@ def post(url: str, cuerpo: dict, timeout: float = 600) -> dict:
 
 
 class Servidor:
-    def __init__(self, binario: str, modelo: str, extra: list[str], ctx: int, ngl: int, log: Path):
+    def __init__(self, binario: str, modelo: str, extra: list[str], ctx: int, ngl: int, log: Path,
+                 hilos: int = 0):
         self.puerto = puerto_libre()
         self.url = f"http://127.0.0.1:{self.puerto}"
         cmd = [binario, "-m", modelo, "--port", str(self.puerto), "-c", str(ctx), "-np", "1",
-               "-ngl", str(ngl), "--no-webui", *extra]
+               "-ngl", str(ngl), "--no-webui", *(["-t", str(hilos)] if hilos > 0 else []), *extra]
         self.log = open(log, "w")
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT)
         self.cmd = cmd
@@ -105,18 +111,34 @@ def prompt_aguja(n_relleno: int) -> str:
 
 
 def medir(srv: Servidor, reps: int, n_predict: int) -> dict:
-    gen, pre, textos = [], [], []
-    srv.completar("Hola", 8)  # calentamiento
+    # Una petición con error (p. ej. HTTP 500 del parser de respuestas con texto que no es UTF-8
+    # válido) se cuenta como error y no entra en las medianas; la corrida continúa.
+    gen, pre, textos, errores = [], [], [], 0
+    try:
+        srv.completar("Hola", 8)  # calentamiento
+    except urllib.error.HTTPError:
+        pass
     for p in PROMPTS:
         for r in range(reps):
-            res = srv.completar(p, n_predict)
+            try:
+                res = srv.completar(p, n_predict)
+            except urllib.error.HTTPError:
+                errores += 1
+                if r == 0:
+                    textos.append(None)
+                continue
             t = res.get("timings", {})
             gen.append(t.get("predicted_per_second", 0.0))
             pre.append(t.get("prompt_per_second", 0.0))
             if r == 0:
                 textos.append(res.get("content", ""))
-    return {"gen_tps": statistics.mean(gen), "gen_tps_sd": statistics.pstdev(gen),
-            "pre_tps": statistics.mean(pre), "textos": textos}
+    return {"gen": gen, "pre": pre, "textos": textos, "errores": errores}
+
+
+def cuartiles(v: list[float]) -> tuple[float, float, float]:
+    v = sorted(v)
+    q = statistics.quantiles(v, n=4) if len(v) >= 4 else [v[0], statistics.median(v), v[-1]]
+    return q[0], statistics.median(v), q[2]
 
 
 def carga_mixta(a) -> int:
@@ -164,6 +186,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="[NAI] vanilla vs. NAI")
     ap.add_argument("-m", "--modelo", required=True)
     ap.add_argument("--server", default=str(RAIZ / "build" / "bin" / "llama-server"))
+    ap.add_argument("--server-oficial", help="llama-server del llama.cpp oficial (agrega la variante 'llama.cpp oficial')")
+    ap.add_argument("--rondas", type=int, default=3, help="rondas con orden rotado de variantes")
+    ap.add_argument("--hilos", type=int, default=0, help="-t para llama-server (0 = automático)")
+    ap.add_argument("--variantes", default="", help="lista separada por comas para correr solo algunas")
     ap.add_argument("--borrador", help="GGUF creado con nai_borrador_capas.py (activa la variante auto-especulación)")
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--n-predict", type=int, default=128)
@@ -184,51 +210,82 @@ def main() -> int:
     a.logs.mkdir(parents=True, exist_ok=True)
     if a.carga_mixta > 0:
         return carga_mixta(a)
+    # (nombre, flags, binario)
     variantes = [
-        ("vanilla", []),
-        ("autopista", ["--nai-autopista"]),
-        ("desalojo", ["--context-shift", "--nai-desalojo"]),
-        ("gravedad", ["--nai-gravedad", str(a.gravedad)]),
+        ("vanilla", [], a.server),
+        ("autopista", ["--nai-autopista"], a.server),
+        ("desalojo", ["--context-shift", "--nai-desalojo"], a.server),
+        ("gravedad", ["--nai-gravedad", str(a.gravedad)], a.server),
     ]
+    if a.server_oficial:
+        variantes.insert(0, ("llama.cpp oficial", [], a.server_oficial))
     if a.borrador:
         variantes.append(("auto-especulación", ["-md", a.borrador, "--spec-draft-n-max", "8", "--spec-draft-n-min", "1",
-                                                "-ngld", str(a.ngl)]))
+                                                "-ngld", str(a.ngl)], a.server))
+    if a.variantes:
+        pedidas = {v.strip() for v in a.variantes.split(",")}
+        variantes = [v for v in variantes if v[0] in pedidas or v[0] == "vanilla"]
 
-    resultados = {}
-    for nombre, flags in variantes:
-        print(f"[NAI] variante {nombre}: {' '.join(flags) or '(sin flags)'}", flush=True)
-        srv = Servidor(a.server, a.modelo, flags, a.ctx, a.ngl, a.logs / f"{nombre}.log")
+    resultados = {n: {"gen": [], "pre": [], "textos": None, "errores": 0} for n, _, _ in variantes}
+    for ronda in range(a.rondas):
+        k = ronda % len(variantes)
+        orden = variantes[k:] + variantes[:k]   # orden rotado: nadie corre siempre primero
+        for nombre, flags, binario in orden:
+            print(f"[NAI] ronda {ronda + 1}/{a.rondas} · {nombre}: {' '.join(flags) or '(sin flags)'}", flush=True)
+            srv = Servidor(binario, a.modelo, flags, a.ctx, a.ngl, a.logs / f"{nombre}-r{ronda + 1}.log", a.hilos)
+            try:
+                srv.esperar()
+                m = medir(srv, a.reps, a.n_predict)
+            finally:
+                srv.cerrar()
+            r = resultados[nombre]
+            r["gen"] += m["gen"]
+            r["pre"] += m["pre"]
+            r["errores"] += m["errores"]
+            if r["textos"] is None:
+                r["textos"] = m["textos"]
+
+    # aguja (una vez): contexto pequeño + generación larga => fuerza context shift
+    for nombre, flags, binario in variantes:
+        if nombre not in ("vanilla", "desalojo", "gravedad"):
+            continue
+        extra = ["--context-shift"] if nombre != "desalojo" else []
+        srv = Servidor(binario, a.modelo, flags + extra, a.ctx_aguja, a.ngl, a.logs / f"{nombre}-aguja.log", a.hilos)
         try:
             srv.esperar()
-            resultados[nombre] = medir(srv, a.reps, a.n_predict)
+            res = srv.completar(prompt_aguja(a.ctx_aguja // 40), a.ctx_aguja, {"n_keep": 0})
+            resultados[nombre]["aguja"] = AGUJA in res.get("content", "")
+        except urllib.error.HTTPError as e:
+            resultados[nombre]["aguja"] = f"error HTTP {e.code}"
         finally:
             srv.cerrar()
 
-        # aguja: contexto pequeño + generación larga => fuerza context shift
-        if nombre in ("vanilla", "desalojo", "gravedad"):
-            extra = ["--context-shift"] if nombre != "desalojo" else []
-            srv = Servidor(a.server, a.modelo, flags + extra, a.ctx_aguja, a.ngl, a.logs / f"{nombre}-aguja.log")
-            try:
-                srv.esperar()
-                res = srv.completar(prompt_aguja(a.ctx_aguja // 40), a.ctx_aguja, {"n_keep": 0})
-                resultados[nombre]["aguja"] = AGUJA in res.get("content", "")
-            except urllib.error.HTTPError as e:
-                resultados[nombre]["aguja"] = f"error HTTP {e.code}"
-            finally:
-                srv.cerrar()
-
+    resultados = {n: r for n, r in resultados.items() if r["gen"]}
+    if "vanilla" not in resultados:
+        print("[NAI] todas las peticiones de vanilla fallaron; revisa los logs")
+        return 1
     base = resultados["vanilla"]
-    print("\n| Variante | Generación (tok/s) | Δ vs vanilla | Prefill (tok/s) | Salida greedy = vanilla | Aguja |")
-    print("|---|---|---|---|---|---|")
+    _, base_med, _ = cuartiles(base["gen"])
+    base_ms = 1000.0 / base_med
+    print("\n| Variante | Generación mediana (tok/s) | Rango intercuartil | ms/token | Δ ms/token | Δ % | "
+          "Prefill mediana (tok/s) | Salida greedy = NAI vanilla | Errores | Aguja |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for nombre, r in resultados.items():
-        delta = 100.0 * (r["gen_tps"] / base["gen_tps"] - 1.0) if base["gen_tps"] else 0.0
-        iguales = sum(x == y for x, y in zip(r["textos"], base["textos"]))
+        q1, med, q3 = cuartiles(r["gen"])
+        ms = 1000.0 / med
+        pares = [(x, y) for x, y in zip(r["textos"], base["textos"]) if x is not None and y is not None]
+        iguales = sum(x == y for x, y in pares)
         aguja = r.get("aguja", "—")
         aguja = "sí" if aguja is True else "no" if aguja is False else aguja
-        print(f"| {nombre} | {r['gen_tps']:.2f} ± {r['gen_tps_sd']:.2f} | {delta:+.1f}% | {r['pre_tps']:.1f} "
-              f"| {iguales}/{len(base['textos'])} | {aguja} |")
-    print(f"\nModelo: {os.path.basename(a.modelo)} | reps: {a.reps} | n_predict: {a.n_predict} | ngl: {a.ngl}")
-    print("Nota: con un modelo de prueba aleatorio la 'aguja' no es significativa; usa un modelo real.")
+        r.update({"gen_mediana": med, "ms_token": ms, "delta_ms": ms - base_ms, "iguales": iguales})
+        print(f"| {nombre} | {med:.2f} | {q1:.1f}–{q3:.1f} | {ms:.2f} | {ms - base_ms:+.2f} | "
+              f"{100.0 * (med / base_med - 1.0):+.1f}% | {statistics.median(r['pre']):.1f} | "
+              f"{iguales}/{len(pares)} | {r['errores']} | {aguja} |")
+    n_med = a.rondas * a.reps * len(PROMPTS)
+    print(f"\nModelo: {os.path.basename(a.modelo)} | {a.rondas} rondas × {a.reps} reps × {len(PROMPTS)} prompts "
+          f"= {n_med} mediciones por variante | n_predict: {a.n_predict} | ngl: {a.ngl}")
+    print("Δ ms/token = costo absoluto por token frente a NAI vanilla (todas las funciones apagadas).")
+    print("Si el rango intercuartil de dos variantes se traslapa, la diferencia no es concluyente.")
 
     if a.salida:
         a.salida.write_text(json.dumps(resultados, ensure_ascii=False, indent=2))
