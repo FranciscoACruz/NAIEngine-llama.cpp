@@ -226,6 +226,7 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(test-nai.cpp) # [NAI]
+llama_build(nai-manual/nai_medir_capas.cpp) # [NAI] medición de la autopista por capas (requiere modelo)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
