@@ -1,342 +1,296 @@
-llama_add_compile_flags()
+cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
+project("llama.cpp" C CXX)
+include(CheckIncludeFileCXX)
 
-function(llama_build source)
-    set(TEST_SOURCES ${source} ${ARGN})
-
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_TARGET ${LLAMA_TEST_NAME})
-    else()
-        get_filename_component(TEST_TARGET ${source} NAME_WE)
-    endif()
-
-    add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
-    if (LLAMA_TESTS_INSTALL)
-        install(TARGETS ${TEST_TARGET} RUNTIME)
-    endif()
-endfunction()
-
-function(llama_test target)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_NAME ${LLAMA_TEST_NAME})
-    else()
-        set(TEST_NAME ${target})
-    endif()
-
-    set(TEST_TARGET ${target})
-
-    add_test(
-        NAME ${TEST_NAME}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
-endfunction()
-
-function(llama_test_cmd target)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_NAME ${LLAMA_TEST_NAME})
-    else()
-        set(TEST_NAME ${target})
-    endif()
-
-    add_test(
-        NAME ${TEST_NAME}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND ${target}
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
-endfunction()
-
-# Builds and runs a test source file.
-# Optional args:
-# - NAME: name of the executable & test target (defaults to the source file name without extension)
-# - LABEL: label for the test (defaults to main)
-# - ARGS: arguments to pass to the test executable
-# - WORKING_DIRECTORY
-function(llama_build_and_test source)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_TARGET ${LLAMA_TEST_NAME})
-    else()
-        get_filename_component(TEST_TARGET ${source} NAME_WE)
-    endif()
-
-    add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    if (LLAMA_TESTS_INSTALL)
-        install(TARGETS ${TEST_TARGET} RUNTIME)
-    endif()
-    target_link_libraries(${TEST_TARGET} PRIVATE llama-common)
-
-    add_test(
-        NAME ${TEST_TARGET}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
-endfunction()
-
-# build test-tokenizer-0 target once and add many tests
-llama_build(test-tokenizer-0.cpp)
-
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-bert-bge          ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-bert-bge.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-command-r         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-command-r.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-deepseek-coder    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-deepseek-coder.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-deepseek-llm      ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-deepseek-llm.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-falcon            ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-falcon.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-gemma-4           ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-gpt-2             ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-llama-bpe         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-llama-spm         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-spm.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-mpt               ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-mpt.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-phi-3             ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-phi-3.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen2             ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen2.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen35            ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen35.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-refact.gguf)
-llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-starcoder.gguf)
-
-if (NOT WIN32)
-    llama_test_cmd(
-        ${CMAKE_CURRENT_SOURCE_DIR}/test-tokenizers-repo.sh
-        NAME test-tokenizers-ggml-vocabs
-        WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-        ARGS https://huggingface.co/ggml-org/vocabs ${PROJECT_SOURCE_DIR}/models/ggml-vocabs
-    )
+# Silenciar advertencia de conversión de 64 a 32 bits para compiladores Clang (Xcode / AppleClang)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wno-shorten-64-to-32)
 endif()
 
-if (LLAMA_LLGUIDANCE)
-    llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
-endif ()
+#set(CMAKE_WARN_DEPRECATED YES)
+set(CMAKE_WARN_UNUSED_CLI YES)
 
-llama_build(test-recurrent-state-rollback.cpp)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
-    # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
-    llama_build_and_test(test-sampling.cpp)
-    llama_build_and_test(test-reasoning-budget.cpp)
-    llama_build_and_test(test-grammar-parser.cpp)
-    llama_build_and_test(test-grammar-integration.cpp)
-    llama_build_and_test(test-llama-grammar.cpp)
-    llama_build_and_test(test-batch-alloc.cpp)
-    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-chat PRIVATE server-context)
-    # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
-    if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
-        llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-        target_include_directories(test-json-schema-to-grammar PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    endif()
-
-    if (NOT GGML_BACKEND_DL)
-        llama_build(test-quantize-stats.cpp)
-    endif()
-
-    llama_build(test-gbnf-validator.cpp)
-
-    # build test-tokenizer-1-bpe target once and add many tests
-    llama_build(test-tokenizer-1-bpe.cpp)
-
-    # TODO: disabled due to slowness
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-aquila    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-aquila.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-falcon    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-falcon.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-gpt-2     ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-2.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-gpt-neox  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gpt-neox.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-llama-bpe ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf --ignore-merges)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-mpt       ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-mpt.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-refact    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-refact.gguf)
-    #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-starcoder ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-starcoder.gguf)
-
-    # build test-tokenizer-1-spm target once and add many tests
-    llama_build(test-tokenizer-1-spm.cpp)
-
-    llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-llama-spm ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-spm.gguf)
-    #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-baichuan.gguf)
-
-    # llama_build_and_test(test-double-float.cpp) # SLOW
-
-    llama_build_and_test(test-llama-archs.cpp)
-
-    set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
-    file(MAKE_DIRECTORY "${MODEL_DIR}")
-
-    llama_test(
-        test-llama-archs
-        NAME test-generate-models
-        LABEL main
-        ARGS -o "${MODEL_DIR}"
-    )
-    set_tests_properties(test-generate-models PROPERTIES
-        FIXTURES_SETUP generate-models
-    )
-
-    llama_test(
-        test-recurrent-state-rollback
-        LABEL main
-        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
-    )
-    set_tests_properties(test-recurrent-state-rollback PROPERTIES
-        FIXTURES_REQUIRED generate-models
-    )
+if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-llama_build_and_test(test-jinja.cpp)
-llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
-llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-llama_build_and_test(test-chat-template.cpp)
-llama_build_and_test(test-log.cpp)
-llama_build_and_test(test-nai.cpp) # [NAI]
-llama_build_and_test(
-    test-peg-parser.cpp
-    peg-parser/simple-tokenize.cpp
-    peg-parser/test-basic.cpp
-    peg-parser/test-gbnf-generation.cpp
-    peg-parser/test-json-parser.cpp
-    peg-parser/test-json-serialization.cpp
-    peg-parser/test-python-dict-parser.cpp
-    peg-parser/test-unicode.cpp
-    peg-parser/tests.h
-)
+message("CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 
-if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
-    set(MODEL_HASH "SHA256=66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739")
+# Add path to modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(LLAMA_STANDALONE ON)
+
+    include(git-vars)
+
+    # configure project version
+    # TODO
 else()
-    set(MODEL_NAME "tinyllamas/stories15M-be.Q4_0.gguf")
-    set(MODEL_HASH "SHA256=9aec857937849d976f30397e97eb1cabb53eb9dcb1ce4611ba8247fb5f44c65d")
-endif()
-set(MODEL_DEST "${CMAKE_BINARY_DIR}/${MODEL_NAME}")
-
-add_test(NAME test-download-model COMMAND ${CMAKE_COMMAND}
-    -DDEST=${MODEL_DEST}
-    -DNAME=${MODEL_NAME}
-    -DHASH=${MODEL_HASH}
-    -P ${CMAKE_SOURCE_DIR}/cmake/download-models.cmake
-)
-set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download-model)
-
-llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
-set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
-
-llama_build_and_test(test-arg-parser.cpp)
-llama_build_and_test(test-model-resolution.cpp)
-# the test serves its repos from an httplib server, and the library links it privately
-target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
-
-if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
-  # TODO: repair known memory leaks
-  llama_build_and_test(test-opt.cpp)
-endif()
-llama_build_and_test(test-backend-ops.cpp)
-
-llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
-llama_build_and_test(test-autorelease.cpp       LABEL "model")
-llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
-
-# Test for state restore with fragmented KV cache
-# Requires a model, uses same args pattern as test-thread-safety
-llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
-
-# Test state save/load functionality
-llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
-
-if (APPLE)
-    llama_build(test-rset-release.cpp)
+    set(LLAMA_STANDALONE OFF)
 endif()
 
-if (NOT GGML_BACKEND_DL)
-    # these tests use the backends directly and cannot be built with dynamic loading
-    llama_build_and_test(test-barrier.cpp)
-    llama_build_and_test(test-quantize-fns.cpp)
-    llama_build_and_test(test-quantize-perf.cpp)
-    llama_build_and_test(test-rope.cpp)
-    llama_build_and_test(test-col2im-1d.cpp)
-endif()
+option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 
-# libmtmd
-set(LLAMA_TEST_NAME test-mtmd-c-api)
-llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
-unset(LLAMA_TEST_NAME)
+option(LLAMA_WASM_MEM64 "llama: use 64-bit memory in WASM builds" ON)
 
-# GGUF model data fetcher library for tests that need real model metadata
-# Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
-if (TARGET cpp-httplib)
-    get_target_property(_cpp_httplib_defs cpp-httplib INTERFACE_COMPILE_DEFINITIONS)
-    if (_cpp_httplib_defs MATCHES "CPPHTTPLIB_OPENSSL_SUPPORT")
-        add_library(gguf-model-data STATIC gguf-model-data.cpp)
-        target_link_libraries(gguf-model-data PRIVATE llama-common cpp-httplib)
-        target_include_directories(gguf-model-data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if (EMSCRIPTEN)
+    set(BUILD_SHARED_LIBS_DEFAULT OFF)
 
-        add_executable(test-gguf-model-data test-gguf-model-data.cpp)
-        target_link_libraries(test-gguf-model-data PRIVATE gguf-model-data llama-common)
-        llama_test(test-gguf-model-data LABEL "model")
+    # Use 64-bit memory to support backend_get_memory queries
+    # TODO: analyze performance impact, see https://spidermonkey.dev/blog/2025/01/15/is-memory64-actually-worth-using
+    if (LLAMA_WASM_MEM64)
+      add_compile_options("-sMEMORY64=1")
+      add_link_options("-sMEMORY64=1")
+    endif()
+    add_link_options("-sALLOW_MEMORY_GROWTH=1")
 
-        # test-quant-type-selection requires gguf-model-data for remote model metadata
-        llama_build_and_test(test-quant-type-selection.cpp LABEL "model")
-        target_link_libraries(test-quant-type-selection PRIVATE gguf-model-data)
-        target_compile_definitions(test-quant-type-selection PRIVATE
-            SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots")
+    option(LLAMA_WASM_SINGLE_FILE "llama: embed WASM inside the generated llama.js" OFF)
+    option(LLAMA_BUILD_HTML "llama: build HTML file" ON)
+    if (LLAMA_BUILD_HTML)
+        set(CMAKE_EXECUTABLE_SUFFIX ".html")
+    endif()
+else()
+    if (MINGW)
+        set(BUILD_SHARED_LIBS_DEFAULT OFF)
+    else()
+        set(BUILD_SHARED_LIBS_DEFAULT ON)
     endif()
 endif()
 
-# dummy executable - not installed
-get_filename_component(TEST_TARGET test-c.c NAME_WE)
-add_executable(${TEST_TARGET} test-c.c)
-target_link_libraries(${TEST_TARGET} PRIVATE llama)
+option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
 
-if (NOT LLAMA_USE_SYSTEM_GGML)
-    # Needs non-public ggml-impl.h
-    llama_build_and_test(test-gguf.cpp)
-
-    # Needs non-public ggml{,-backend}-impl.h
-    llama_build_and_test(test-alloc.cpp)
+if (WIN32)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
-llama_build(test-export-graph-ops.cpp)
-if (TARGET gguf-model-data)
-    target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
-    target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
+if (MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
+
+if (LLAMA_STANDALONE)
+    # enable parallel builds for msbuild
+    list(APPEND CMAKE_VS_GLOBALS UseMultiToolTask=true)
+    list(APPEND CMAKE_VS_GLOBALS EnforceProcessCountAcrossBuilds=true)
+endif()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(LLAMA_TOOLS_INSTALL_DEFAULT OFF)
+else()
+    set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
+endif()
+
+# subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
+        OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
+    set(LLAMA_SUBPROCESS_DEFAULT OFF)
+else()
+    set(LLAMA_SUBPROCESS_DEFAULT ON)
+endif()
+
+#
+# option list
+#
+
+# debug
+option(LLAMA_ALL_WARNINGS           "llama: enable all compiler warnings"                   ON)
+option(LLAMA_ALL_WARNINGS_3RD_PARTY "llama: enable all compiler warnings in 3rd party libs" OFF)
+
+# build
+option(LLAMA_FATAL_WARNINGS "llama: enable -Werror flag" OFF)
+
+# sanitizers
+option(LLAMA_SANITIZE_THREAD    "llama: enable thread sanitizer"    OFF)
+option(LLAMA_SANITIZE_ADDRESS   "llama: enable address sanitizer"   OFF)
+option(LLAMA_SANITIZE_UNDEFINED "llama: enable undefined sanitizer" OFF)
+
+# utils
+option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE})
+
+# extra artifacts
+option(LLAMA_BUILD_TESTS     "llama: build tests"                                                                ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_TOOLS     "llama: build tools"                                                                ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
+option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
+
+option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
+option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
+
+# 3rd party libs
+option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
+option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
+option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+
+
+# Required for relocatable CMake package
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
+
+if (NOT DEFINED LLAMA_BUILD_NUMBER)
+    set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
+endif()
+if (NOT DEFINED LLAMA_BUILD_COMMIT)
+    set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
+endif()
+set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
+
+# override ggml options
+set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
+set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
+
+# change the default for these ggml options
+if (NOT DEFINED GGML_LLAMAFILE)
+    set(GGML_LLAMAFILE_DEFAULT ON)
+endif()
+
+if (NOT DEFINED GGML_CUDA_GRAPHS)
+    set(GGML_CUDA_GRAPHS_DEFAULT ON)
+endif()
+
+# transition helpers
+function (llama_option_depr TYPE OLD)
+    if (${OLD})
+        set(NEW "${ARGV2}")
+        if(NEW)
+            message(${TYPE} "${OLD} is deprecated, use ${NEW} instead")
+            set(${NEW} ON PARENT_SCOPE)
+        else()
+            message(${TYPE} "${OLD} is deprecated and will be ignored")
+        endif()
+    endif()
+endfunction()
+
+llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
+llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
+llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
+llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
+llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
+llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
+llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
+llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
+llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
+llama_option_depr(WARNING     LLAMA_CURL)
+
+include("cmake/license.cmake")
+license_add_file("llama.cpp" "LICENSE")
+
+#
+# 3rd-party
+#
+
+if (LLAMA_USE_SYSTEM_GGML)
+    message(STATUS "Using system-provided libggml, skipping ggml build")
+    find_package(ggml REQUIRED)
+    add_library(ggml ALIAS ggml::ggml)
+endif()
+
+if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
+    set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
+    set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
+    add_subdirectory(ggml)
+    # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+#
+# build the library
+#
+
+add_subdirectory(src)
+
+#
+# utils, programs, examples and tests
+#
+
+if (LLAMA_BUILD_COMMON)
+    add_subdirectory(common)
+    add_subdirectory(vendor/cpp-httplib)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
+    include(CTest)
+    add_subdirectory(tests)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+    add_subdirectory(pocs)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
+    add_subdirectory(tools)
+endif()
+
+if (LLAMA_BUILD_APP)
+    add_subdirectory(app)
+endif()
+
+# Standalone libmtmd build without pulling in the rest of the tools/ tree.
+# Useful when packaging just the mtmd library for language bindings (e.g. an
+# Apple XCFramework, or a WASM build). When the full tools build is enabled,
+# mtmd is already built by the tools/ subdirectory above; this hook only fires
+# when LLAMA_BUILD_TOOLS is OFF to avoid double-adding the target.
+option(LLAMA_BUILD_MTMD "llama: build tools/mtmd library standalone" OFF)
+if (LLAMA_BUILD_MTMD AND NOT (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS))
+    add_subdirectory(tools/mtmd)
+endif()
+
+#
+# install
+#
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
+set(LLAMA_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
+
+set_target_properties(llama
+    PROPERTIES
+        PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+
+install(TARGETS llama LIBRARY PUBLIC_HEADER)
+
+if (LLAMA_BUILD_COMMON)
+    install(TARGETS llama-common LIBRARY)
+endif()
+
+configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/llama-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama
+    PATH_VARS LLAMA_INCLUDE_INSTALL_DIR
+              LLAMA_LIB_INSTALL_DIR
+              LLAMA_BIN_INSTALL_DIR )
+
+write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+    VERSION ${LLAMA_INSTALL_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
+
+configure_file(cmake/llama.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
