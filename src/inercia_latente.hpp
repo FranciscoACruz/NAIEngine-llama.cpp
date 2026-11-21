@@ -1,237 +1,148 @@
 #ifndef NAI_INERCIA_LATENTE_HPP
 #define NAI_INERCIA_LATENTE_HPP
 
+// =============================================================================
+// [NAI] Mapa de masa semántica por (secuencia, posición)
+//
+// Cada llama_context tiene su propio mapa (no hay estado global), así que
+// varios contextos y varias secuencias no se mezclan.
+//
+// Definición de "masa" (heurística, debe validarse con métricas de calidad):
+//   masa(seq, pos) = entropía de Shannon normalizada, en [0, 1], de la
+//                    distribución que el modelo predijo en esa posición.
+//   - Masa baja  -> el modelo estaba seguro: texto predecible, candidato a
+//                   desalojo cuando el contexto se llena.
+//   - Masa alta  -> "nodo de conflicto": el modelo dudaba, se conserva.
+//   - Posiciones sin logits (la mayor parte del prompt) reciben
+//     MASA_PROTEGIDA (1.0), es decir, se tratan como las más importantes.
+//
+// El contexto no es thread-safe (igual que el resto de llama_context), por lo
+// que no se usan locks.
+// =============================================================================
+
+#include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <vector>
-#include <memory>
-#include <atomic>
-#include "ggml.h"
-
-#if defined(__x86_64__) || defined(_M_X64)
-    #include <immintrin.h>
-    #define NAI_CPU_PAUSE() _mm_pause()
-#elif defined(__aarch64__)
-    #define NAI_CPU_PAUSE() asm volatile("yield" ::: "memory")
-#else
-    #define NAI_CPU_PAUSE() do { } while (0)
-#endif
-
-struct InerciaLatenteResult {
-    bool  es_autopista;
-    float varianza;
-    float entropia;
-};
 
 namespace nai {
 
-class NaiSpinlock {
-private:
-    std::atomic_flag flag = ATOMIC_FLAG_INIT;
-public:
-    void lock() noexcept {
-        while (flag.test_and_set(std::memory_order_acquire)) {
-            NAI_CPU_PAUSE();
-        }
-    }
-    void unlock() noexcept {
-        flag.clear(std::memory_order_release);
-    }
-    NaiSpinlock() = default;
-    NaiSpinlock(const NaiSpinlock&) = delete;
-    NaiSpinlock& operator=(const NaiSpinlock&) = delete;
-};
+constexpr float MASA_PROTEGIDA = 1.0f;
 
-class NaiScopedLock {
-    NaiSpinlock& _l;
-public:
-    explicit NaiScopedLock(NaiSpinlock& l) noexcept : _l(l) { _l.lock(); }
-    ~NaiScopedLock() { _l.unlock(); }
-    NaiScopedLock(const NaiScopedLock&) = delete;
-    NaiScopedLock& operator=(const NaiScopedLock&) = delete;
-};
+// Entropía de Shannon normalizada (H / ln(n)) de softmax(logits), en [0, 1].
+// Devuelve MASA_PROTEGIDA si los datos no son válidos.
+inline float entropia_normalizada(const float * logits, size_t n) {
+    if (!logits || n < 2) return MASA_PROTEGIDA;
+
+    float l_max = -std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i < n; ++i) {
+        if (logits[i] > l_max) l_max = logits[i];
+    }
+    if (!std::isfinite(l_max)) return MASA_PROTEGIDA;
+
+    // H = ln(Z) - sum(p_i * (l_i - l_max)),  con Z = sum(exp(l_i - l_max))
+    double z  = 0.0;
+    double sl = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const double d = static_cast<double>(logits[i]) - l_max;
+        if (std::isnan(d)) return MASA_PROTEGIDA;
+        const double e = std::exp(d);
+        z  += e;
+        sl += e * d;
+    }
+    if (!(z > 0.0)) return MASA_PROTEGIDA;
+
+    const double h     = std::log(z) - sl / z;
+    const double h_max = std::log(static_cast<double>(n));
+    double r = h / h_max;
+    if (r < 0.0) r = 0.0;
+    if (r > 1.0) r = 1.0;
+    return static_cast<float>(r);
+}
 
 class MapaMasaSemantica {
-private:
-    static constexpr size_t SHARD_COUNT      = 64;
-    static constexpr size_t DEFAULT_MAX_POS  = 65536;
-
-    std::unique_ptr<std::atomic<float>[]> _masas;
-    size_t _capacity;
-
-    NaiSpinlock _locks[SHARD_COUNT];
-
-    static inline size_t shard_of(size_t pos) noexcept {
-        return pos & (SHARD_COUNT - 1);
-    }
-
 public:
-    explicit MapaMasaSemantica(size_t initial_capacity = DEFAULT_MAX_POS)
-        : _capacity(0)
-    {
-        allocate(initial_capacity);
+    void init(uint32_t n_seq, uint32_t n_pos) {
+        _n_pos = n_pos;
+        _masas.assign(n_seq, std::vector<float>(n_pos, MASA_PROTEGIDA));
     }
 
-    void pre_allocate(size_t max_pos) {
-        if (_capacity >= max_pos) return;
-        allocate(max_pos);
+    bool activo() const noexcept { return !_masas.empty(); }
+
+    void liberar() {
+        _masas.clear();
+        _masas.shrink_to_fit();
+        _n_pos = 0;
     }
 
-    size_t get_capacity() const noexcept { return _capacity; }
-
-    void registrar_masa(int pos, float masa) {
-        if (pos < 0 || _capacity == 0) return;
-        size_t upos = static_cast<size_t>(pos);
-        if (upos >= _capacity) return;
-
-        size_t shard = shard_of(upos);
-        NaiScopedLock guard(_locks[shard]);
-        _masas[upos].store(masa, std::memory_order_relaxed);
+    void registrar(int32_t seq, int32_t pos, float masa) {
+        if (!valido(seq, pos)) return;
+        _masas[seq][pos] = masa;
     }
 
-    [[nodiscard]] float obtener_masa(int pos) const noexcept {
-        if (pos < 0 || _capacity == 0) return 1.0f;
-        size_t upos = static_cast<size_t>(pos);
-        if (upos >= _capacity) return 1.0f;
-        return _masas[upos].load(std::memory_order_relaxed);
+    float obtener(int32_t seq, int32_t pos) const {
+        if (!valido(seq, pos)) return MASA_PROTEGIDA;
+        return _masas[seq][pos];
     }
 
-    // [NAI] Desplaza las masas cuando el KV Cache mueve las posiciones
-    // de los tokens (K-Shift). Usado por el Desalojo Gravitatorio.
-    void shift_masa(int start_pos, int end_pos, int delta) {
-        if (delta == 0 || _capacity == 0) return;
-        if (start_pos < 0 || end_pos > (int)_capacity) return;
-
-        if (delta > 0) {
-            for (int i = end_pos - 1; i >= start_pos; --i) {
-                if (i + delta < (int)_capacity) {
-                    float m = _masas[i].load(std::memory_order_relaxed);
-                    _masas[i + delta].store(m, std::memory_order_relaxed);
-                }
-            }
-            for (int i = start_pos; i < start_pos + delta; ++i) {
-                if (i >= 0 && i < (int)_capacity) {
-                    _masas[i].store(1.0f, std::memory_order_relaxed);
-                }
-            }
-        } else {
-            int abs_delta = -delta;
-            for (int i = start_pos; i < end_pos; ++i) {
-                if (i - abs_delta >= 0) {
-                    float m = _masas[i].load(std::memory_order_relaxed);
-                    _masas[i - abs_delta].store(m, std::memory_order_relaxed);
-                }
-            }
-            for (int i = end_pos - abs_delta; i < end_pos; ++i) {
-                if (i >= 0 && i < (int)_capacity) {
-                    _masas[i].store(1.0f, std::memory_order_relaxed);
-                }
-            }
+    void limpiar(int32_t seq) {
+        if (seq < 0) {
+            for (auto & v : _masas) std::fill(v.begin(), v.end(), MASA_PROTEGIDA);
+            return;
+        }
+        if (seq < static_cast<int32_t>(_masas.size())) {
+            std::fill(_masas[seq].begin(), _masas[seq].end(), MASA_PROTEGIDA);
         }
     }
 
-    void limpiar() {
-        if (_capacity == 0) return;
-        for (size_t s = 0; s < SHARD_COUNT; ++s) _locks[s].lock();
-        for (size_t i = 0; i < _capacity; ++i) {
-            _masas[i].store(1.0f, std::memory_order_relaxed);
+    // Elimina [p0, p0 + n) y recorre hacia atrás las posiciones [p0 + n, p_end).
+    // Equivale a seq_rm(p0, p0+n) + seq_add(p0+n, p_end, -n) en el KV cache.
+    void quitar_y_recorrer(int32_t seq, int32_t p0, int32_t n, int32_t p_end) {
+        if (seq < 0 || seq >= static_cast<int32_t>(_masas.size()) || n <= 0 || p0 < 0) return;
+        auto & v = _masas[seq];
+        const int32_t lim = std::min<int32_t>(p_end, static_cast<int32_t>(v.size()));
+        for (int32_t i = p0 + n; i < lim; ++i) {
+            v[i - n] = v[i];
         }
-        for (size_t s = SHARD_COUNT; s > 0; --s) _locks[s - 1].unlock();
+        for (int32_t i = std::max(p0, lim - n); i < lim; ++i) {
+            v[i] = MASA_PROTEGIDA;
+        }
+    }
+
+    // Ventana [p, p + n) con la menor masa media dentro de [p_min, p_end).
+    // O(p_end - p_min) con suma deslizante. Devuelve -1 si no cabe ninguna.
+    int32_t buscar_ventana_minima(int32_t seq, int32_t p_min, int32_t p_end, int32_t n) const {
+        if (seq < 0 || seq >= static_cast<int32_t>(_masas.size()) || n <= 0) return -1;
+        p_min = std::max<int32_t>(p_min, 0);
+        p_end = std::min<int32_t>(p_end, static_cast<int32_t>(_n_pos));
+        if (p_end - p_min < n) return -1;
+
+        const auto & v = _masas[seq];
+        double suma = 0.0;
+        for (int32_t i = p_min; i < p_min + n; ++i) suma += v[i];
+
+        double  mejor   = suma;
+        int32_t p_mejor = p_min;
+        for (int32_t p = p_min + 1; p + n <= p_end; ++p) {
+            suma += v[p + n - 1] - v[p - 1];
+            if (suma < mejor) { mejor = suma; p_mejor = p; }
+        }
+        return p_mejor;
     }
 
 private:
-    void allocate(size_t max_pos) {
-        size_t cap = 1;
-        while (cap < max_pos) cap <<= 1;
-
-        auto new_masas = std::unique_ptr<std::atomic<float>[]>(
-            new std::atomic<float>[cap]);
-        for (size_t i = 0; i < cap; ++i) {
-            new_masas[i].store(1.0f, std::memory_order_relaxed);
-        }
-        _masas = std::move(new_masas);
-        _capacity = cap;
+    bool valido(int32_t seq, int32_t pos) const noexcept {
+        return seq >= 0 && pos >= 0 &&
+               seq < static_cast<int32_t>(_masas.size()) &&
+               static_cast<uint32_t>(pos) < _n_pos;
     }
+
+    uint32_t _n_pos = 0;
+    std::vector<std::vector<float>> _masas;
 };
 
-inline InerciaLatenteResult evaluar_inercia_tensor(
-    const float * data, size_t n_embd, float umbral = 3.2f)
-{
-    InerciaLatenteResult res;
-    if (!data || n_embd == 0) {
-        res.es_autopista = false;
-        res.varianza = 0.0f;
-        res.entropia = 1.0f;
-        return res;
-    }
-
-    double sum = 0.0;
-    double sq_sum = 0.0;
-    for (size_t i = 0; i < n_embd; ++i) {
-        double val = static_cast<double>(data[i]);
-        sum += val;
-        sq_sum += val * val;
-    }
-
-    double mean = sum / n_embd;
-    double variance = (sq_sum / n_embd) - (mean * mean);
-    if (variance < 0.0) variance = 0.0;
-
-    res.varianza = static_cast<float>(variance);
-    res.es_autopista = (res.varianza > umbral);
-    res.entropia = static_cast<float>(1.0 / (1.0 + res.varianza));
-    return res;
-}
-
-inline float calcular_factor_gravitatorio(
-    int posicion_token, int posicion_actual, float masa_semantica)
-{
-    int dt = posicion_actual - posicion_token;
-    if (dt <= 128) return 1.0f;
-
-    float alpha = 0.0005f;
-    float g_factor = 1.0f / (1.0f + alpha * static_cast<float>(dt)
-                             * (2.2f / (masa_semantica + 0.1f)));
-    return g_factor;
-}
-
-inline void aplicar_atenuacion_gravitatoria(
-    float * k_data, float * v_data, size_t dim,
-    int posicion_token, int posicion_actual, float masa_semantica)
-{
-    if (!k_data || !v_data || dim == 0) return;
-
-    float g_factor = calcular_factor_gravitatorio(
-        posicion_token, posicion_actual, masa_semantica);
-    if (g_factor >= 0.999f) return;
-
-    for (size_t i = 0; i < dim; ++i) {
-        k_data[i] *= g_factor;
-        v_data[i] *= g_factor;
-    }
-}
-
-inline void aplicar_atenuacion_tensor_fp16(
-    ggml_fp16_t * k_data, ggml_fp16_t * v_data, size_t dim, float g_factor)
-{
-    if (!k_data || !v_data || dim == 0 || g_factor >= 0.999f) return;
-    for (size_t i = 0; i < dim; ++i) {
-        float k_val = ggml_fp16_to_fp32(k_data[i]) * g_factor;
-        float v_val = ggml_fp16_to_fp32(v_data[i]) * g_factor;
-        k_data[i] = ggml_fp32_to_fp16(k_val);
-        v_data[i] = ggml_fp32_to_fp16(v_val);
-    }
-}
-
-inline MapaMasaSemantica g_nai_mapa_masa;
-
 } // namespace nai
-
-inline InerciaLatenteResult evaluar_inercia_tensor(
-    const float * data, size_t n_embd, float umbral = 3.2f)
-{
-    return nai::evaluar_inercia_tensor(data, n_embd, umbral);
-}
 
 #endif

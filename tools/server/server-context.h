@@ -3,7 +3,6 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
-#include "TriageWrapper.h"
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
@@ -161,7 +160,6 @@ struct server_routes {
     json get_model_info() const;
 
 private:
-    TriageEngine triage_engine; // <-- Instancia persistente del motor de triaje
 
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,

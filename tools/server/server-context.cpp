@@ -6,7 +6,6 @@
 #include "server-queue.h"
 #include "server-schema.h"
 #include "server-stream.h"
-#include "common/TriageWrapper.h"
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
@@ -16,6 +15,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "../../src/llama-ext.h" // [NAI] API de masa semántica / desalojo
 
 #include <algorithm>
 #include <cstddef>
@@ -1213,6 +1213,15 @@ private:
         if (ctx_tgt == nullptr) {
             SRV_ERR("failed to create_context with model '%s'\n", params_base.model.path.c_str());
             return false;
+        }
+
+        // [NAI] mapa de masa para el desalojo selectivo en el context shift
+        if (params_base.nai_desalojo) {
+            if (!params_base.ctx_shift) {
+                SRV_WRN("%s\n", "[NAI] --nai-desalojo no tiene efecto sin --context-shift");
+            } else {
+                llama_nai_set_masa_activa(ctx_tgt, true);
+            }
         }
 
         vocab = llama_model_get_vocab(model_tgt);
@@ -2949,10 +2958,25 @@ private:
                 // ref: https://github.com/ggml-org/llama.cpp/pull/24786
                 n_discard = std::clamp(n_discard, 0, std::max(0, n_left - 1));
 
-                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+                // [NAI] por defecto se descarta [n_keep, n_keep + n_discard); con --nai-desalojo se elige
+                // la ventana de menor masa semántica, sin tocar los tokens más recientes.
+                const llama_pos p_end = slot.prompt.tokens.pos_next();
+                int p_discard = n_keep;
+                if (params_base.nai_desalojo && n_discard > 0) {
+                    const int n_reciente = std::min(256, n_left / 4);
+                    const llama_pos p0 = llama_nai_buscar_ventana_desalojo(ctx_tgt, slot.id, n_keep, p_end - n_reciente, n_discard);
+                    if (p0 >= n_keep) {
+                        p_discard = p0;
+                    }
+                }
 
-                slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
-                slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d, p_discard = %d\n", n_keep, n_left, n_discard, p_discard);
+
+                slot.mem.seq_rm (slot.id, p_discard            , p_discard + n_discard);
+                slot.mem.seq_add(slot.id, p_discard + n_discard, p_end, -n_discard);
+                if (params_base.nai_desalojo) {
+                    llama_nai_notificar_desalojo(ctx_tgt, slot.id, p_discard, n_discard, p_end);
+                }
 
                 // add generated tokens to cache
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16818#discussion_r2473269481
@@ -2960,7 +2984,7 @@ private:
                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                     llama_tokens new_tokens = slot.prompt.tokens.get_tokens(); // copy
-                    for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
+                    for (size_t i = p_discard + n_discard; i < new_tokens.size(); i++) {
                         new_tokens[i - n_discard] = new_tokens[i];
                     }
 

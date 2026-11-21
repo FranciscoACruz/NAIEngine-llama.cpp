@@ -1,7 +1,6 @@
 #include "arg.h"
 #include "common.h"
 #include "log.h"
-#include "TriageWrapper.h"
 #include "cli-context.h"
 
 #include <signal.h>

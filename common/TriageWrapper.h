@@ -1,6 +1,5 @@
 #pragma once
 
-#include <iostream>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -23,19 +22,41 @@ class TriageEngine {
 private:
     std::vector<std::string> anclajes_tecnicos = {
         "c++", "python", "json", "sql", "struct", "class", 
-        "función", "funcion", "error", "memoria", "algoritmo", "http", "api", "linux"
+        "funcion", "error", "memoria", "algoritmo", "http", "api", "linux"
     };
 
     std::vector<std::string> verbos_abiertos = {
-        "hazme", "crea", "mejora", "optimiza", "ayudame", "analiza", "como"
+        "hazme", "crea", "mejora", "optimiza", "ayudame", "analiza", "como"  // ya sin acentos
     };
 
-    // Helper seguro para convertir UTF-8 / ASCII a minúsculas
+    // Minúsculas + supresión de diacríticos del español en UTF-8
+    // (Á/á -> a, É/é -> e, Í/í -> i, Ó/ó -> o, Ú/ú/Ü/ü -> u, Ñ/ñ -> n).
+    // El resto de bytes no ASCII se conserva sin cambios.
     static std::string a_minusculas(const std::string & str) {
-        std::string res = str;
-        std::transform(res.begin(), res.end(), res.begin(), [](unsigned char c) {
-            return std::tolower(c);
-        });
+        std::string res;
+        res.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            const unsigned char c = static_cast<unsigned char>(str[i]);
+            if (c == 0xC3 && i + 1 < str.size()) {
+                const unsigned char d = static_cast<unsigned char>(str[i + 1]) | 0x20; // a minúscula
+                char base = 0;
+                switch (d) {
+                    case 0xA1: base = 'a'; break; // á
+                    case 0xA9: base = 'e'; break; // é
+                    case 0xAD: base = 'i'; break; // í
+                    case 0xB3: base = 'o'; break; // ó
+                    case 0xBA: case 0xBC: base = 'u'; break; // ú ü
+                    case 0xB1: base = 'n'; break; // ñ
+                    default: break;
+                }
+                if (base) {
+                    res.push_back(base);
+                    ++i;
+                    continue;
+                }
+            }
+            res.push_back(c < 0x80 ? static_cast<char>(std::tolower(c)) : static_cast<char>(c));
+        }
         return res;
     }
 

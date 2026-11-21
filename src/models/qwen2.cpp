@@ -129,27 +129,6 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        // ==================== NAI: EARLY EXIT HOOK ====================
-        // Evaluamos en una capa intermedia (Capa 12)
-        if (il == 11) { // Capa 12 (0-indexed)
-            // 1. Normalización del tensor intermedio usando los pesos finales
-            ggml_tensor * cur_early_norm = build_norm(cur,
-                    model.output_norm, NULL,
-                    LLM_NORM_RMS, il);
-
-            // 2. Proyección intermedia hacia el vocabulario (LM Head)
-            ggml_tensor * logits_early = build_lora_mm(model.output, cur_early_norm, model.output_s);
-            if (model.output_b != nullptr) {
-                logits_early = ggml_add(ctx0, logits_early, model.output_b);
-            }
-
-            // 3. Etiquetamos el tensor para que llama-context.cpp lo extraiga
-            ggml_set_name(logits_early, "nai_logits_early");
-
-            // 4. Agregamos el nodo de salida temprana al grafo
-            ggml_build_forward_expand(gf, logits_early);
-        }
-        // ==============================================================
         // input for next layer
         inpL = cur;
     }

@@ -11,18 +11,17 @@
 struct common_sampler;
 
 // =================================================================
-// [NAI] TELEMETRÍA DE INERCIA
-// Histograma lock-free de decisiones de la autopista.
-// Llamar a common_sampler_nai_stats_dump() al final de la generación
-// para ver la distribución y calibrar delta_logit.
+// [NAI] TELEMETRÍA DE LA AUTOPISTA DE MUESTREO
+// Histograma lock-free (global al proceso) de decisiones de la autopista.
+// Solo cuenta cuando params.nai_autopista está activo y es compatible.
 // =================================================================
 struct nai_stats_snapshot {
-    uint64_t conflicto;  // cadena completa de samplers
-    uint64_t razon_1;    // único candidato
-    uint64_t razon_2;    // margen de logits
-    uint64_t razon_3;    // cola de probabilidad
-    uint64_t razon_4;    // dominancia de p1
-    uint64_t invalido;   // NaN/Inf detectado
+    uint64_t conflicto;  // se usó la cadena completa de samplers
+    uint64_t razon_1;    // atajo exacto (temp <= 0)
+    uint64_t razon_2;    // atajo por p(top-1) >= nai_autopista_p_min
+    uint64_t razon_3;    // reservado
+    uint64_t razon_4;    // reservado
+    uint64_t invalido;   // NaN/Inf detectado (se usa la cadena completa)
 };
 
 nai_stats_snapshot common_sampler_get_nai_stats();

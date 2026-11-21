@@ -1677,6 +1677,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
+        {"--nai-desalojo"},
+        "[NAI] en el context shift, desalojar la ventana de tokens de menor masa semántica "
+        "en lugar de la más antigua (requiere --context-shift; default: desactivado)",
+        [](common_params & params) {
+            params.nai_desalojo = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_DESALOJO"));
+    add_opt(common_arg(
+        {"--nai-triaje"},
+        "[NAI] analizar el prompt antes de generar y pedir aclaración si es ambiguo (default: desactivado)",
+        [](common_params & params) {
+            params.nai_triaje = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {
@@ -1950,6 +1965,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.temp = std::stof(value);
             params.sampling.temp = std::max(params.sampling.temp, 0.0f);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--nai-autopista"},
+        "[NAI] activar la autopista de muestreo: devuelve el top-1 sin recorrer la cadena de samplers "
+        "cuando es seguro (sin gramática, logit-bias ni penalizaciones). Exacto con temp 0. (default: desactivado)",
+        [](common_params & params) {
+            params.sampling.nai_autopista = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--nai-autopista-p-min"}, "P",
+        string_format("[NAI] con temp > 0, probabilidad mínima del top-1 para tomar el atajo (default: %.3f)",
+                      (double)params.sampling.nai_autopista_p_min),
+        [](common_params & params, const std::string & value) {
+            const float v = std::stof(value);
+            if (v <= 0.0f || v > 1.0f) {
+                throw std::invalid_argument("--nai-autopista-p-min debe estar en (0, 1]");
+            }
+            params.sampling.nai_autopista_p_min = v;
         }
     ).set_sampling());
     add_opt(common_arg(

@@ -1342,11 +1342,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     // assign the output layer
     pimpl->dev_output = get_layer_buft_list(n_layer_all);
 
-    // [NAI Autopista] Log seguro de verificación
-    const int CAPA_PUNTO_CONTROL = (int)n_layer_all / 2;
-    printf("\n>>> [NAI Autopista] Punto de control de inercia latente configurado en Capa %d/%d <<<\n\n", 
-           CAPA_PUNTO_CONTROL, (int)n_layer_all);
-
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
 
     // create tensors for the weights

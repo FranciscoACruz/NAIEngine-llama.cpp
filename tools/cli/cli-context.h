@@ -25,7 +25,7 @@ struct cli_context {
     cli_client client;                // always initialized
     std::optional<cli_server> server; // only set when no --server-base is given
 
-    // Instancia del motor de triaje
+    // [NAI] motor de triaje (solo se usa con --nai-triaje)
     TriageEngine triage;
 
     // properties of the connected server
@@ -63,7 +63,8 @@ private:
     bool generate_completion(generated_content & content_out, cli_timings & timings);
     void fetch_server_props();
     void add_system_prompt();
-    void push_user_message(const std::string & text);
+    // [NAI] devuelve false si el triaje ya respondió y no hay que generar
+    bool push_user_message(const std::string & text);
 
     // check if server have multiple models (router mode)
     // if yes, list them then ask; do nothing otherwise

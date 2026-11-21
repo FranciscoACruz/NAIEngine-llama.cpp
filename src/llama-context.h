@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "inercia_latente.hpp"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -258,7 +259,21 @@ public:
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
+    // [NAI] masa semántica y desalojo selectivo (ver src/inercia_latente.hpp)
+    void      nai_set_masa_activa(bool activa);
+    bool      nai_masa_activa() const { return nai_masa.activo(); }
+    float     nai_obtener_masa(llama_seq_id seq_id, llama_pos pos) const;
+    llama_pos nai_buscar_ventana_desalojo(llama_seq_id seq_id, llama_pos p_min, llama_pos p_end, int32_t n_discard) const;
+    bool      nai_desalojar(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
+    void      nai_notificar_desalojo(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
+
 private:
+    // [NAI] actualiza el mapa de masa con los logits recién calculados
+    void nai_registrar_masas(const llama_batch & batch, const std::vector<int32_t> & out_ids);
+
+    nai::MapaMasaSemantica nai_masa;
+
+
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,

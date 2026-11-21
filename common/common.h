@@ -225,6 +225,10 @@ struct common_params_sampling {
 
     int32_t n_prev             = 64;     // number of previous tokens to remember
     int32_t n_probs            = 0;      // if greater than 0, output the probabilities of top n_probs tokens.
+
+    // [NAI] Autopista de muestreo (opt-in). Ver common/sampling.cpp.
+    bool    nai_autopista       = false;  // activar el atajo cuando el top-1 está determinado
+    float   nai_autopista_p_min = 0.99f;  // con temp > 0: p(top-1) mínima para tomar el atajo
     int32_t min_keep           = 0;      // 0 = disabled, otherwise samplers should return at least min_keep tokens
     int32_t top_k              = 40;     // <= 0 to use vocab size
     float   top_p              = 0.95f;  // 1.0 = disabled
@@ -558,6 +562,8 @@ struct common_params {
     bool no_perf           = false; // disable performance metrics
     bool show_timings      = true;  // show timing information on CLI
     bool ctx_shift         = false; // context shift on infinite text generation
+    bool nai_desalojo      = false; // [NAI] en el context shift, desalojar la ventana de menor masa semántica
+    bool nai_triaje        = false; // [NAI] (CLI) triaje de prompts ambiguos antes de generar
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 

@@ -38,6 +38,7 @@ add_library(llama
             llama-quant.cpp
             llama-sampler.cpp
             llama-vocab.cpp
+            nai-telemetry-hub.cpp   # [NAI]
             unicode-data.cpp
             unicode.cpp
             unicode.h

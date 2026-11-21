@@ -5,7 +5,6 @@
 #include <string>
 #include <unistd.h>
 #include <sampling.h>
-#include "inercia_latente.hpp"
 #include "logging.h"
 #include "chat.h"
 #include "common.h"
@@ -267,7 +266,6 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
 
     if (clear_kv_cache) {
         llama_memory_clear(llama_get_memory(g_context), false);
-        nai::g_nai_mapa_masa.limpiar(); // <--- [NAI HOOK]
     }
 }
 

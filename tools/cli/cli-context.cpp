@@ -180,24 +180,32 @@ bool cli_context::init() {
 }
 
 // =================================================================
-// 🛑 FUNCION ÚNICA CON INTERCEPCIÓN INTEGRADA
+// [NAI] Mensaje del usuario con triaje opcional (--nai-triaje)
+// Devuelve true si hay que generar respuesta con el modelo.
 // =================================================================
-void cli_context::push_user_message(const std::string & text) {
-    // 1. Evaluación con el Wrapper antes de formatear JSON
-    ResultadoTriaje res = triage.procesar_prompt(text);
-
-    if (res.modo == ModoTriaje::INDAGACION_CORTA) {
-        printf("\n[IA - Indagación Previa]: %s\n\n", res.mensaje_respuesta.c_str());
-        return; // Cancela la inferencia pesada de la GPU
-    } 
-
+bool cli_context::push_user_message(const std::string & text) {
     std::string text_procesado = text;
-    if (res.modo == ModoTriaje::PROPUESTA_HIPOTESIS) {
-        printf("\n[IA - Hipótesis]: %s\n\n", res.mensaje_respuesta.c_str());
-        text_procesado = res.contexto_inyectado + text;
+
+    if (params.nai_triaje) {
+        const ResultadoTriaje res = triage.procesar_prompt(text);
+
+        if (res.modo == ModoTriaje::INDAGACION_CORTA) {
+            // Se registra el turno completo (usuario + pregunta aclaratoria) para que el
+            // historial siga siendo coherente, y se omite la generación.
+            impl->messages.push_back({ {"role", "user"},      {"content", text} });
+            impl->messages.push_back({ {"role", "assistant"}, {"content", res.mensaje_respuesta} });
+            printf("\n[NAI - Indagación previa]: %s\n\n", res.mensaje_respuesta.c_str());
+            write_output_file(string_format("Assistant:\n%s\n\n", res.mensaje_respuesta.c_str()));
+            impl->pending_media = json::array();
+            return false;
+        }
+
+        if (res.modo == ModoTriaje::PROPUESTA_HIPOTESIS) {
+            printf("\n[NAI - Hipótesis]: %s\n\n", res.mensaje_respuesta.c_str());
+            text_procesado = res.contexto_inyectado + text;
+        }
     }
 
-    // 2. Proceso normal usando el texto ajustado
     json content;
     if (impl->pending_media.empty()) {
         content = text_procesado;
@@ -213,6 +221,7 @@ void cli_context::push_user_message(const std::string & text) {
         {"role",    "user"},
         {"content", content}
     });
+    return true;
 }
 
 void cli_context::fetch_server_props() {
@@ -603,9 +612,12 @@ int cli_context::run() {
         }
 
         if (add_user_msg) {
-            push_user_message(cur_msg);
             write_output_file(string_format("User:\n%s\n\n", cur_msg.c_str()));
+            const bool generar = push_user_message(cur_msg);
             cur_msg.clear();
+            if (!generar) {
+                continue; // [NAI] el triaje respondió con una pregunta aclaratoria
+            }
         }
 
         cli_timings timings;

@@ -133,3 +133,35 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 // if out is nullptr, returns the number of tokens without writing to out
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
+
+//
+// [NAI] Masa semántica y desalojo selectivo del KV cache
+//
+// Uso típico (ver tools/server, pre_decode):
+//   1. llama_nai_set_masa_activa(ctx, true) tras crear el contexto.
+//   2. Cuando una secuencia llena su contexto, en lugar de descartar siempre
+//      [n_keep, n_keep + n_discard), buscar la ventana de menor masa con
+//      llama_nai_buscar_ventana_desalojo() y desalojarla con llama_nai_desalojar().
+//   3. El llamador debe recorrer su propia lista de tokens igual que el KV cache.
+//
+
+// Activa/desactiva el cálculo de masa (coste extra: O(n_vocab) por cada salida con logits).
+LLAMA_API void llama_nai_set_masa_activa(struct llama_context * ctx, bool activa);
+
+// Masa en [0, 1] de (seq_id, pos). 1.0 = protegida / desconocida.
+LLAMA_API float llama_nai_obtener_masa(const struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos);
+
+// Inicio de la ventana de n_discard posiciones con menor masa media dentro de [p_min, p_end).
+// Devuelve -1 si el mapa no está activo o no cabe ninguna ventana.
+LLAMA_API llama_pos llama_nai_buscar_ventana_desalojo(
+        const struct llama_context * ctx, llama_seq_id seq_id, llama_pos p_min, llama_pos p_end, int32_t n_discard);
+
+// Quita [p0, p0 + n_discard) del KV cache de seq_id y recorre [p0 + n_discard, p_end) hacia atrás.
+// Devuelve false si la memoria no admite desplazamientos (p. ej. modelos recurrentes o M-RoPE).
+LLAMA_API bool llama_nai_desalojar(
+        struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
+
+// Solo recorre el mapa de masa (sin tocar el KV cache). Para llamadores que ya hicieron
+// seq_rm/seq_add por su cuenta, p. ej. el servidor, que también mueve el contexto del draft.
+LLAMA_API void llama_nai_notificar_desalojo(
+        struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
