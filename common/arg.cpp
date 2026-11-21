@@ -1685,6 +1685,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_DESALOJO"));
     add_opt(common_arg(
+        {"--nai-sesiones"}, "DIR",
+        "[NAI] activar sesiones persistentes: guarda el estado de cada conversación (campo \"nai_session\" "
+        "de la petición) en DIR y lo restaura cuando la sesión vuelve (default: desactivado)",
+        [](common_params & params, const std::string & value) {
+            params.nai_sesiones_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_SESIONES"));
+    add_opt(common_arg(
+        {"--nai-sesion-ttl"}, "SEG",
+        string_format("[NAI] segundos sin actividad tras los que una sesión y su archivo se eliminan (default: %d = 24 h)",
+                      params.nai_sesion_ttl),
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("--nai-sesion-ttl debe ser mayor que 0");
+            }
+            params.nai_sesion_ttl = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_SESION_TTL"));
+    add_opt(common_arg(
         {"--nai-triaje"},
         "[NAI] analizar el prompt antes de generar y pedir aclaración si es ambiguo (default: desactivado)",
         [](common_params & params) {

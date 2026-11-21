@@ -564,6 +564,8 @@ struct common_params {
     bool ctx_shift         = false; // context shift on infinite text generation
     bool nai_desalojo      = false; // [NAI] en el context shift, desalojar la ventana de menor masa semántica
     bool nai_triaje        = false; // [NAI] (CLI) triaje de prompts ambiguos antes de generar
+    std::string nai_sesiones_dir;           // [NAI] carpeta de sesiones persistentes (vacío = desactivado)
+    int32_t     nai_sesion_ttl  = 86400;    // [NAI] segundos sin actividad antes de eliminar una sesión (24 h)
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 

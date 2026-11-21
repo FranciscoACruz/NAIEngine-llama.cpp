@@ -1259,6 +1259,10 @@ bool llama_context::nai_desalojar(llama_seq_id seq_id, llama_pos p0, int32_t n_d
     return true;
 }
 
+void llama_context::nai_limpiar_masa(llama_seq_id seq_id) {
+    nai_masa.limpiar(seq_id);
+}
+
 void llama_context::nai_notificar_desalojo(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end) {
     nai_masa.quitar_y_recorrer(seq_id, p0, n_discard, p_end);
 }
@@ -4406,4 +4410,7 @@ bool      llama_nai_desalojar(llama_context * ctx, llama_seq_id seq_id, llama_po
 }
 void      llama_nai_notificar_desalojo(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end) {
     ctx->nai_notificar_desalojo(seq_id, p0, n_discard, p_end);
+}
+void      llama_nai_limpiar_masa(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->nai_limpiar_masa(seq_id);
 }

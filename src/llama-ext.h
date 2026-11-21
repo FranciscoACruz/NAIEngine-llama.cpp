@@ -165,3 +165,7 @@ LLAMA_API bool llama_nai_desalojar(
 // seq_rm/seq_add por su cuenta, p. ej. el servidor, que también mueve el contexto del draft.
 LLAMA_API void llama_nai_notificar_desalojo(
         struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
+
+// Marca todas las posiciones de seq_id como protegidas (masa 1.0). Usar al cargar
+// un estado guardado en la secuencia (p. ej. al restaurar una sesión NAI).
+LLAMA_API void llama_nai_limpiar_masa(struct llama_context * ctx, llama_seq_id seq_id);

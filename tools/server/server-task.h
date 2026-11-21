@@ -51,6 +51,8 @@ struct task_params {
     bool stream          = false;
     bool include_usage   = false;
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
+
+    std::string nai_session; // [NAI] identificador de sesión persistente (vacío = sin sesión)
     bool return_tokens   = false;
     bool return_progress = false;
 

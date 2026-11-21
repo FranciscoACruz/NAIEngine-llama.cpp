@@ -16,6 +16,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "../../src/llama-ext.h" // [NAI] API de masa semántica / desalojo
+#include "../../src/nai-session-table.hpp" // [NAI] sesiones persistentes
 
 #include <algorithm>
 #include <cstddef>
@@ -200,6 +201,9 @@ struct server_slot {
     llama_context * ctx_dft = nullptr;
 
     common_memory mem;
+
+    // [NAI] sesión cuyo estado está cargado en el KV de este slot (vacío = ninguna)
+    std::string nai_sesion;
 
     // multimodal
     mtmd_context * mctx = nullptr;
@@ -949,6 +953,182 @@ private:
 
     server_batch batch;
 
+    // =====================================================================
+    // [NAI] Sesiones persistentes (el "GPS" de la conversación)
+    //   - al asignar un slot: si la sesión tiene estado guardado y no expiró, se restaura
+    //   - al liberar el slot: se guarda el estado de la conversación de esa sesión
+    //   - tras nai_sesion_ttl segundos sin actividad: se elimina sesión y archivo
+    // =====================================================================
+    nai::NaiSessionTable nai_tabla;
+    std::string          nai_dir;
+    int64_t              nai_ttl = 86400;
+
+    static int64_t nai_ahora() {
+        return std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    std::string nai_ruta(uint64_t handle) const {
+        char nombre[64];
+        snprintf(nombre, sizeof(nombre), "nai-%016" PRIx64 ".bin", handle);
+        return (std::filesystem::path(nai_dir) / nombre).string();
+    }
+
+    void nai_sesiones_init() {
+        nai_dir = params_base.nai_sesiones_dir;
+        nai_ttl = params_base.nai_sesion_ttl;
+        if (nai_dir.empty()) {
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(nai_dir, ec);
+        if (ec) {
+            SRV_ERR("[NAI] no se pudo crear la carpeta de sesiones '%s': %s\n", nai_dir.c_str(), ec.message().c_str());
+            nai_dir.clear();
+            return;
+        }
+        // recuperar sesiones guardadas antes de reiniciar el servidor (persisten mientras no expiren)
+        const int64_t ahora = nai_ahora();
+        size_t n_cargadas = 0, n_borradas = 0;
+        for (const auto & entrada : std::filesystem::directory_iterator(nai_dir, ec)) {
+            const std::string nombre = entrada.path().filename().string();
+            uint64_t handle = 0;
+            if (nombre.size() != 24 || nombre.rfind("nai-", 0) != 0 || sscanf(nombre.c_str(), "nai-%16" SCNx64 ".bin", &handle) != 1) {
+                continue;
+            }
+            const auto ftime = std::filesystem::last_write_time(entrada.path(), ec);
+            const int64_t mtime = std::chrono::duration_cast<std::chrono::seconds>(
+                    ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now().time_since_epoch()).count();
+            if (mtime + nai_ttl <= ahora) {
+                std::filesystem::remove(entrada.path(), ec);
+                n_borradas++;
+                continue;
+            }
+            NaiSession ses;
+            ses.session_handle = handle;
+            ses.last_activity  = mtime;
+            nai_tabla.guardar(ses);
+            n_cargadas++;
+        }
+        SRV_INF("[NAI] sesiones persistentes en '%s' (TTL %" PRId64 " s): %zu recuperadas, %zu expiradas eliminadas\n",
+                nai_dir.c_str(), nai_ttl, n_cargadas, n_borradas);
+    }
+
+    void nai_purgar() {
+        if (nai_dir.empty()) {
+            return;
+        }
+        const size_t n = nai_tabla.expirar(nai_ahora(), nai_ttl, [this](const NaiSession & ses) {
+            std::error_code ec;
+            std::filesystem::remove(nai_ruta(ses.session_handle), ec);
+            // ningún slot debe seguir asociado a una sesión expirada
+            for (auto & sl : slots) {
+                if (!sl.nai_sesion.empty() && nai::hash_sesion(sl.nai_sesion) == ses.session_handle) {
+                    sl.nai_sesion.clear();
+                }
+            }
+        });
+        if (n > 0) {
+            SRV_INF("[NAI] %zu sesiones expiradas eliminadas\n", n);
+        }
+    }
+
+    // Antes de procesar la tarea: deja en el slot el estado de la sesión, si existe.
+    void nai_preparar_slot(server_slot & slot, const server_task & task) {
+        if (nai_dir.empty() || task.is_child()) {
+            return;
+        }
+        const std::string & id = task.params.nai_session;
+        if (id.empty()) {
+            slot.nai_sesion.clear(); // este slot ya no pertenece a ninguna sesión
+            return;
+        }
+        nai_purgar();
+
+        if (slot.nai_sesion == id) {
+            SLT_INF(slot, "[NAI] sesión '%s' ya cargada en el slot\n", id.c_str());
+            return;
+        }
+        slot.nai_sesion = id;
+
+        const uint64_t handle = nai::hash_sesion(id);
+        NaiSession ses;
+        if (!nai_tabla.buscar(handle, ses)) {
+            SLT_INF(slot, "[NAI] sesión nueva '%s'\n", id.c_str());
+            return;
+        }
+        if (mctx != nullptr || slot.can_speculate()) {
+            SLT_WRN(slot, "%s\n", "[NAI] restaurar sesiones no está soportado con multimodal ni decodificación especulativa");
+            return;
+        }
+
+        const std::string ruta = nai_ruta(handle);
+        const int64_t t0 = ggml_time_us();
+        llama_tokens tokens(slot.n_ctx);
+        size_t n_tokens = 0;
+        const size_t n_leidos = llama_state_seq_load_file(ctx_tgt, ruta.c_str(), slot.id, tokens.data(), tokens.size(), &n_tokens);
+        if (n_leidos == 0) {
+            SLT_WRN(slot, "[NAI] no se pudo restaurar la sesión '%s' (archivo ausente o inválido)\n", id.c_str());
+            slot.prompt.clear();
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, -1, -1);
+            return;
+        }
+        // por seguridad: la lista de tokens nunca debe superar lo que realmente está en el KV
+        const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+        n_tokens = std::min<size_t>(n_tokens, (size_t) std::max<llama_pos>(0, pos_max + 1));
+        tokens.resize(n_tokens);
+
+        slot.prompt.clear();
+        slot.prompt.tokens.insert(tokens);
+        llama_nai_limpiar_masa(ctx_tgt, slot.id);
+
+        SLT_INF(slot, "[NAI] sesión '%s' restaurada: %zu tokens, %.1f MiB en %.1f ms\n",
+                id.c_str(), n_tokens, n_leidos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
+    }
+
+    // Al liberar el slot: guarda el estado de la conversación de su sesión.
+    void nai_guardar_slot(server_slot & slot) {
+        if (nai_dir.empty() || slot.nai_sesion.empty()) {
+            return;
+        }
+        if (slot.prompt.tokens.has_mtmd) {
+            return;
+        }
+        const llama_tokens tokens = slot.prompt.tokens.get_text_tokens();
+        if (tokens.empty()) {
+            return;
+        }
+        // guardar solo los tokens que ya están en el KV (el último muestreado puede no estarlo)
+        const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+        const size_t n_guardar = std::min<size_t>(tokens.size(), (size_t) std::max<llama_pos>(0, pos_max + 1));
+        if (n_guardar == 0) {
+            return;
+        }
+
+        const uint64_t handle = nai::hash_sesion(slot.nai_sesion);
+        const std::string ruta = nai_ruta(handle);
+        const std::string tmp  = ruta + ".tmp";
+        const int64_t t0 = ggml_time_us();
+        const size_t n_escritos = llama_state_seq_save_file(ctx_tgt, tmp.c_str(), slot.id, tokens.data(), n_guardar);
+        std::error_code ec;
+        if (n_escritos == 0) {
+            std::filesystem::remove(tmp, ec);
+            SLT_WRN(slot, "[NAI] no se pudo guardar la sesión '%s'\n", slot.nai_sesion.c_str());
+            return;
+        }
+        std::filesystem::rename(tmp, ruta, ec); // reemplazo atómico
+        std::filesystem::permissions(ruta, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::replace, ec);
+
+        NaiSession ses;
+        ses.session_handle = handle;
+        ses.last_activity  = nai_ahora();
+        nai_tabla.guardar(ses);
+
+        SLT_INF(slot, "[NAI] sesión '%s' guardada: %zu tokens, %.1f MiB en %.1f ms\n",
+                slot.nai_sesion.c_str(), n_guardar, n_escritos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
+    }
+
     llama_model   * model_dft = nullptr;
     llama_context * ctx_dft   = nullptr;
 
@@ -1224,6 +1404,9 @@ private:
             }
         }
 
+        // [NAI] sesiones persistentes
+        nai_sesiones_init();
+
         vocab = llama_model_get_vocab(model_tgt);
 
         n_ctx = llama_n_ctx(ctx_tgt);
@@ -1379,6 +1562,9 @@ private:
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
             slot.callback_on_release = [this](int id_slot) {
+                if (server_slot * sl = get_slot_by_id(id_slot)) {
+                    nai_guardar_slot(*sl); // [NAI]
+                }
                 queue_tasks.pop_deferred_task(id_slot);
             };
 
@@ -1828,6 +2014,9 @@ private:
         }
 
         SLT_DBG(slot, "launching slot : %s\n", safe_json_to_str(slot.to_json()).c_str());
+
+        // [NAI] cargar en el slot la conversación de la sesión (si existe y no expiró)
+        nai_preparar_slot(slot, task);
 
         // initialize samplers
         if (task.need_sampling()) {
@@ -4198,6 +4387,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             task.id_slot = json_value(data, "id_slot", -1);
+            task.params.nai_session = json_value(data, "nai_session", std::string()); // [NAI]
             sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat

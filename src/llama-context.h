@@ -266,6 +266,7 @@ public:
     llama_pos nai_buscar_ventana_desalojo(llama_seq_id seq_id, llama_pos p_min, llama_pos p_end, int32_t n_discard) const;
     bool      nai_desalojar(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
     void      nai_notificar_desalojo(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end);
+    void      nai_limpiar_masa(llama_seq_id seq_id);
 
 private:
     // [NAI] actualiza el mapa de masa con los logits recién calculados
