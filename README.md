@@ -197,7 +197,7 @@ Notación: $V$ es el vocabulario, $z \in \mathbb{R}^{|V|}$ los logits de una pos
 
 La masa de un token es la **sorpresa normalizada** del token que realmente quedó en esa posición:
 
-$$I_i = \frac{-\ln p(x_i \mid x_{<i})}{\ln |V|} = \frac{\mathrm{LSE}(z^{(i-1)}) - z^{(i-1)}_{x_i}}{\ln |V|} \in [0, 1]$$
+$$I_i = \frac{-\ln p(x_i \mid x_{\lt i})}{\ln |V|} = \frac{\mathrm{LSE}(z^{(i-1)}) - z^{(i-1)}_{x_i}}{\ln |V|} \in [0, 1]$$
 
 donde $\mathrm{LSE}(z) = \ln \sum_v e^{z_v}$. El resultado se recorta a $[0, 1]$.
 
@@ -215,15 +215,15 @@ Calcular $\mathrm{LSE}$ sobre 152 000 logits por token es el costo principal del
 
 **Corte a $C = 16$ nats** (`NAI_LSE_CORTE`). Con $m = \max_v z_v$:
 
-$$\mathrm{LSE}(z) = m + \ln \sum_v e^{z_v - m} \approx m + \ln \sum_{z_v - m > -C} e^{z_v - m}$$
+$$\mathrm{LSE}(z) = m + \ln \sum_v e^{z_v - m} \approx m + \ln \sum_{z_v - m \gt  -C} e^{z_v - m}$$
 
-Cada término omitido vale menos de $e^{-16} \approx 1.1 \times 10^{-7}$ y la suma conservada es $\ge 1$ (incluye $e^0$), así que el error es como máximo $\ln(1 + |V| e^{-C})$. Con $|V| = 152\,000$ eso es $\le 0.017$ nats, es decir $\le 0.0015$ en masa normalizada ($\div \ln|V| \approx 11.9$). En la práctica, con logits con pico, el error es $< 10^{-4}$ nats.
+Cada término omitido vale menos de $e^{-16} \approx 1.1 \times 10^{-7}$ y la suma conservada es $\ge 1$ (incluye $e^0$), así que el error es como máximo $\ln(1 + |V| e^{-C})$. Con $|V| = 152\,000$ eso es $\le 0.017$ nats, es decir $\le 0.0015$ en masa normalizada ($\div \ln|V| \approx 11.9$). En la práctica, con logits con pico, el error es $\lt  10^{-4}$ nats.
 
 **`exp_rapido` sin ramas.** Para $x \le 0$:
 
 $$e^x = 2^{t}, \quad t = x \log_2 e, \quad 2^t = 2^{n} \cdot 2^{f}, \quad n = \lfloor t \rfloor,\ f = t - n \in [0, 1)$$
 
-$2^n$ se arma escribiendo directamente el exponente IEEE-754 ($(n + 127) \ll 23$) y $2^f$ se evalúa con un polinomio minimax de grado 5 por Horner. Error relativo $< 2 \times 10^{-6}$ en $[-16, 0]$ (lo verifica `test-nai`). Como no tiene ramas ni llamadas, el compilador lo vectoriza (NEON en Apple Silicon, AVX en x86).
+$2^n$ se arma escribiendo directamente el exponente IEEE-754 ($(n + 127) \ll 23$) y $2^f$ se evalúa con un polinomio minimax de grado 5 por Horner. Error relativo $\lt  2 \times 10^{-6}$ en $[-16, 0]$ (lo verifica `test-nai`). Como no tiene ramas ni llamadas, el compilador lo vectoriza (NEON en Apple Silicon, AVX en x86).
 
 **16 acumuladores.** El máximo y la suma se calculan con 16 acumuladores independientes para romper la dependencia entre iteraciones y dejar que el compilador use registros vectoriales. Los NaN sueltos se ignoran; si todo es NaN o $-\infty$, la masa queda protegida.
 
@@ -287,7 +287,7 @@ $z^{(k)}$ son los logits que daría el modelo si saliera en la capa $k$ (*logit 
 - $1 - \cos(h_k, h_{k-1})$: cuánto cambia el estado entre capas;
 - $\cos(h_k, h_L)$: qué tan cerca está ya del estado final;
 - la **capa de resolución**: la primera desde la que la lente coincide con la predicción final y ya no cambia;
-- para varios umbrales $\tau$, la regla "salir en la primera capa con $\Delta h > \tau$": cuántos tokens saldrían antes, cuántos acertarían y qué fracción de capas se ahorraría.
+- para varios umbrales $\tau$, la regla "salir en la primera capa con $\Delta h \gt  \tau$": cuántos tokens saldrían antes, cuántos acertarían y qué fracción de capas se ahorraría.
 
 **Por qué no se aplica un early exit directo:** si la regla se equivoca cambia la salida, y las capas omitidas no escriben K/V, así que los tokens siguientes atienden a un caché incompleto. La aplicación sin pérdida es la auto-especulación (§5.7).
 
@@ -303,7 +303,7 @@ y la aceleración respecto a decodificar normal es:
 
 $$\text{aceleración} = \frac{E[\text{tokens}]}{\gamma_d \cdot c + T_{\text{ver}}}, \qquad c = \frac{K}{L},\quad T_{\text{ver}} = \frac{\text{costo de verificar } \gamma_d + 1 \text{ tokens}}{\text{costo de 1 token}}$$
 
-**Medición en M1 8 GB:** verificar un lote de 8 tokens costó entre 2 y 3.4 pasos normales ($T_{\text{ver}} \approx 2$–$3.4$, porque en CPU/Metal pequeño el lote no es gratis como en una GPU grande), y la lente mostró que en Qwen2.5-0.5B casi ningún token se resuelve antes de la capa 21 de 24. Con esos números la aceleración queda $< 1$: **en ese equipo la auto-especulación es más lenta.** En GPUs donde $T_{\text{ver}} \approx 1$ y con modelos entrenados para salida temprana (LayerSkip) puede ganar. Mide siempre con `nai_medir_capas` antes de usarla.
+**Medición en M1 8 GB:** verificar un lote de 8 tokens costó entre 2 y 3.4 pasos normales ($T_{\text{ver}} \approx 2$–$3.4$, porque en CPU/Metal pequeño el lote no es gratis como en una GPU grande), y la lente mostró que en Qwen2.5-0.5B casi ningún token se resuelve antes de la capa 21 de 24. Con esos números la aceleración queda $\lt  1$: **en ese equipo la auto-especulación es más lenta.** En GPUs donde $T_{\text{ver}} \approx 1$ y con modelos entrenados para salida temprana (LayerSkip) puede ganar. Mide siempre con `nai_medir_capas` antes de usarla.
 
 ### 5.8 Sesiones persistentes (`--nai-sesiones`, `src/nai-session-table.hpp`)
 
@@ -320,7 +320,7 @@ $$\text{aceleración} = \frac{E[\text{tokens}]}{\gamma_d \cdot c + T_{\text{ver}
 
 $$\text{índice}(h) = \left(h \cdot \left\lfloor 2^{64}/\varphi \right\rfloor \bmod 2^{64}\right) \gg (64 - b), \qquad \lfloor 2^{64}/\varphi \rfloor = 11400714819323198485$$
 
-donde $2^b$ es el tamaño de la tabla. Multiplicar por la razón áurea dispersa bien incluso claves con patrones. Los borrados dejan *lápidas* (tombstones) para no romper las cadenas de sondeo, y la tabla se reconstruye cuando $(\text{ocupadas} + \text{lápidas}) / \text{tamaño} > 0.7$.
+donde $2^b$ es el tamaño de la tabla. Multiplicar por la razón áurea dispersa bien incluso claves con patrones. Los borrados dejan *lápidas* (tombstones) para no romper las cadenas de sondeo, y la tabla se reconstruye cuando $(\text{ocupadas} + \text{lápidas}) / \text{tamaño} \gt  0.7$.
 
 **Costo en disco.** El KV cache por token es:
 
@@ -345,7 +345,7 @@ Prototipo de memoria de tamaño fijo inspirada en la mente humana: los pesos del
 
 **Codificación exacta guiada por el modelo.** Un texto se guarda como el resultado de codificación aritmética (rANS de 64 bits, frecuencias de 24 bits) usando las probabilidades del propio modelo. Por el teorema de Shannon, el tamaño se acerca a:
 
-$$\text{bits}(x_{1..n}) \approx \sum_{i=1}^{n} -\log_2 p(x_i \mid x_{<i}) = \ln|V| \cdot \log_2 e \cdot \sum_i I_i$$
+$$\text{bits}(x_{1..n}) \approx \sum_{i=1}^{n} -\log_2 p(x_i \mid x_{\lt i}) = \ln|V| \cdot \log_2 e \cdot \sum_i I_i$$
 
 Es decir, **el costo de recordar un texto es exactamente su masa semántica total**: lo predecible casi no ocupa, lo sorprendente sí. Para reconstruir, el decodificador vuelve a recorrer el mismo camino con el mismo modelo y obtiene el texto idéntico. Requisito: el mismo modelo y el mismo backend determinista al codificar y decodificar.
 
