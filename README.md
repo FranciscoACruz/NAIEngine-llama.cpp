@@ -4,6 +4,8 @@
 
 NAI es una extensión de [llama.cpp](https://github.com/ggml-org/llama.cpp) creada por **Ángelus Tenshi (Francisco Alejandro Cruz Castro)**. Parte de una idea: *gastar cómputo y memoria según cuánta información aporta cada token*, inspirada en principios físicos (inercia, gravedad, disipación). El marco teórico original está en [VISION.md](VISION.md). Este documento describe **lo que hace el código hoy**: cómo descargarlo, compilarlo, ejecutarlo, las fórmulas exactas que implementa, cómo medirlo y cómo modificarlo sin romper nada.
 
+> **Autoría:** la idea, el marco teórico, los cálculos, la lógica y las reglas de negocio de NAI son de Ángelus Tenshi (Francisco Alejandro Cruz Castro). Ver [§14](#14-lógica-cálculos-y-reglas-de-negocio-del-autor) y [§15](#15-autoría-y-cómo-citar).
+
 > **Principio de diseño:** todas las funciones NAI están **desactivadas por defecto**. Sin flags, el motor se comporta exactamente como llama.cpp. Cada función se activa con su propio flag y se puede medir por separado contra la versión sin ella.
 
 ## Índice
@@ -20,6 +22,9 @@ NAI es una extensión de [llama.cpp](https://github.com/ggml-org/llama.cpp) crea
 10. [Solución de problemas](#10-solución-de-problemas)
 11. [Limitaciones y trabajo pendiente](#11-limitaciones-y-trabajo-pendiente)
 12. [Trabajo relacionado](#12-trabajo-relacionado)
+13. [Casos prácticos y campos de aplicación](#13-casos-prácticos-y-campos-de-aplicación)
+14. [Lógica, cálculos y reglas de negocio del autor](#14-lógica-cálculos-y-reglas-de-negocio-del-autor)
+15. [Autoría y cómo citar](#15-autoría-y-cómo-citar)
 
 ---
 
@@ -398,7 +403,7 @@ Todas las cifras son de mediciones reales; el detalle y el método están en [BE
 | Fork corregido vs. fork original | iMac M1 8 GB | **+20 a 28 %** de velocidad de generación |
 | NAI (todo apagado) vs. llama.cpp oficial | x86, forma de Qwen2.5-0.5B | Igual (16.35 vs. 16.30 tok/s, rangos traslapados) |
 | Costo de autopista, desalojo y gravedad | x86, forma de Qwen2.5-0.5B | No distinguible del ruido a ~61 ms/token |
-| Costo del mapa de masa | microbenchmark, $\|V\|$ = 152k | 0.171 ms/token (< 2 % de un token de 0.5B en M1) |
+| Costo del mapa de masa | microbenchmark, $\lvert V \rvert$ = 152k | 0.171 ms/token (< 2 % de un token de 0.5B en M1) |
 | Sesiones: reanudar tras reiniciar el servidor | iMac M1, conversación larga | **16.1 s → 0.3 s** hasta el primer token |
 | Lente por capa | Qwen2.5-0.5B, M1 | Casi ningún token se resuelve antes de la capa 21 de 24 |
 | Auto-especulación | iMac M1 | Más lenta: verificar 8 tokens cuesta 2–3.4 pasos |
@@ -610,9 +615,137 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 - **Compresión con modelos de lenguaje:** Delétang et al., *Language Modeling Is Compression* (2023); Duda, *rANS* (2013).
 - **Hashing:** Aumasson y Bernstein, *SipHash* (2012); Knuth, *TAOCP vol. 3* (hashing multiplicativo).
 - **Teoría de la información:** Shannon (1948).
+- **Marco NAI:** Ángelus Tenshi (Francisco Alejandro Cruz Castro), *NAI Engine: High-Performance LLM Framework via Physics-Based Principles and llama.cpp Optimization* (2026). Ver §14, §15 y [VISION.md](VISION.md).
+
+---
+
+## 13. Casos prácticos y campos de aplicación
+
+La arquitectura NAI sirve donde importa **cuánto cuesta cada token** (memoria, cómputo, energía) y **qué se recuerda** de una conversación. La columna *Estado* distingue lo que funciona hoy de lo que está diseñado.
+
+### 13.1 Casos prácticos
+
+| Caso | Problema | Qué aporta NAI | Funciones | Estado |
+|---|---|---|---|---|
+| **Asistente financiero con historial** (p. ej. AmigoCash) | El usuario vuelve horas después y el asistente olvidó la conversación o tarda en reprocesarla | La conversación se retoma en fracciones de segundo durante 24 h y se borra sola después; al llenarse el contexto se conservan las instrucciones y los datos clave, no el relleno | Sesiones, desalojo selectivo | Disponible (cifrado pendiente: usar disco cifrado) |
+| **IA local en equipos modestos** (8 GB, laptops, mini PC) | Contextos largos que no caben en memoria | El software se adapta al equipo: la memoria se libera según la masa de cada token, sin depender de una arquitectura de hardware | Desalojo, gravedad, mapa de masa | Disponible; gravedad experimental |
+| **Servidor multiusuario / atención al cliente** | Con memoria compartida llena, llama.cpp falla peticiones o trunca conversaciones | Admitir solo la masa que cabe, priorizar lo que termina rápido e hibernar a disco en vez de fallar | Planificador entrelazado, sesiones | Validado en simulación (100 % de peticiones íntegras) |
+| **Agentes autónomos y asistentes de código** | Tareas largas donde las reglas del sistema se pierden entre ruido | El prompt de sistema y las instrucciones tienen masa protegida; el relleno predecible es lo primero en salir | Desalojo, gravedad, triaje | Disponible |
+| **Peticiones ambiguas** | Se gasta cómputo generando respuestas a preguntas mal planteadas | Pedir aclaración o proponer una hipótesis antes de generar | Triaje | Disponible (CLI) |
+| **Tutores y educación** | El alumno vuelve a un tema días después | Memoria por regiones (matemáticas, física, lógica, química...) que recuerda lo importante y reconstruye lo demás desde fragmentos | Memoria reconstructiva | Prototipo |
+| **Conocimiento sin internet** (campo, zonas rurales, emergencias) | Sin conexión y con hardware limitado | Modelo local con memoria prioritaria en supervivencia, agricultura, medicina tradicional, ingeniería y mecánica | Memoria reconstructiva, sesiones | Prototipo |
+| **Creatividad e investigación** | Encontrar relaciones entre ideas lejanas | Cruzar fragmentos de regiones distintas a partir de un concepto (el ejemplo del lápiz: artista, poema, dibujo, manifiesto, matemático) | Memoria reconstructiva (`-c concepto`) | Prototipo |
+| **Privacidad y ciberseguridad** | Conversaciones sensibles que no deben salir del equipo ni ser adivinables | Inferencia local; ids de sesión secretos con hash con clave (SipHash-2-4), permisos 0600, logs sin ids | Sesiones | Disponible |
+| **Generador de API de alto rendimiento** | Integrar inferencia en un backend de microservicios | `bloque_id` reservado para enlazar NAI con el proyecto padre | Telemetría, sesiones | Reservado |
+| **Medición y docencia de LLMs** | Entender en qué capa "decide" un modelo | Lente por capa, regla Δh > τ y perplejidad por capa omitida | `nai_medir_capas` | Disponible |
+
+### 13.2 Campos de aplicación
+
+Tomados del marco del autor (VISION.md §13) y ordenados de lo más cercano a lo más lejano del código actual:
+
+1. **Optimización de modelos de lenguaje (Motor NAI):** contextos largos sin saturación, memoria por masa semántica, persistencia conversacional de 24 h por usuario. *Es lo que implementa este repositorio.*
+2. **Infraestructura de microservicios y sistemas distribuidos (Aperion Engine, raíz del ecosistema):** pasarelas de API, servidores de alta concurrencia, enrutamiento elástico. El planificador entrelazado aplica las mismas ideas al reparto de memoria entre conversaciones.
+3. **Plataformas transaccionales multiusuario:** backends que atienden muchos clientes con memoria fija (fintech, comercio, servicios públicos).
+4. **Dispositivos en el borde (Edge AI) y móviles:** inferencia local que se adapta a la memoria disponible.
+5. **Hardware neuromórfico y aceleradores:** chips que modulan frecuencia y consumo según la incertidumbre de los datos (inercia latente aplicada al silicio). *Conceptual.*
+6. **Robótica y navegación autónoma:** obstáculos críticos como pozos de atracción y ruido ambiental que se desvanece con el tiempo (Matriz S gravitacional). *Conceptual.*
+
+---
+
+## 14. Lógica, cálculos y reglas de negocio del autor
+
+Esta sección reúne **lo que el autor definió** y cómo llegó al código. Cuando una fórmula se tuvo que ajustar para funcionar en un transformer real, se dice qué cambió y por qué; la idea original se conserva.
+
+### 14.1 Cálculos
+
+| # | Cálculo del autor | Fórmula original | Cómo quedó en el código | Dónde |
+|---|---|---|---|---|
+| 1 | **Inercia latente** | $\Delta h = 1 - \mathcal{H}(\sigma(z^{(k)})) / \log_2\lvert V \rvert$ | Igual, con $\ln\lvert V \rvert$ (mismo resultado normalizado) y la cabeza de salida real del modelo; aplicada como medición y como auto-especulación sin pérdida | §5.6, §5.7 |
+| 2 | **Masa semántica** | $I_i = \Vert W_K x_i \Vert_2 \cdot (1 + \mathcal{H}_{\text{local}}(x_i))$ | $\mathcal{H}_{\text{local}}$ como sorpresa del token: $-\ln p(x_i \mid x_{\lt i}) / \ln\lvert V \rvert$; el factor $\Vert W_K x_i \Vert_2$ está pendiente | §5.1 |
+| 3 | **Fórmula Maestra del KV gravitatorio** | $K_i(t+dt) = K_i(t)\, e^{-\gamma\, dt/(I_i+\varepsilon)}$ | Aplicada al **peso de atención** como sesgo en la máscara KQ (equivalente exacto; escalar $K$ no apaga un token) | §5.4 |
+| 4 | **Ecuación diferencial de enfriamiento** | $dK_i/dt = -\gamma K_i / (I_i + \varepsilon)$ | Su solución es la fórmula 3 | §5.4 |
+| 5 | **Expansión de Hubble del contexto** | $K_i(t) = K_i(0)\, e^{-\int H_{\text{local}}\, z\, d\tau}$ | Con corrimiento lineal en la distancia se reduce al mismo término $\Delta t$ de la fórmula 3 | §5.4 |
+| 6 | **Matriz S y coeficiente de restitución** | $h^{(final)} = \mathcal{T}(h^{(0)})\, e^{-\lambda\,\text{Disipación}}$; $\hat S_{\text{elástica}}$ / $\hat S_{\text{inelástica}}$ | Dispersión elástica = autopista de muestreo; en el servidor, prioridad por costo restante | §5.5, §5.11 |
+| 7 | **Fuerza de N cuerpos** | $\mathbf F_{ij} = -G\, I_i I_j (\mathbf r_i - \mathbf r_j)/\Vert \mathbf r_i - \mathbf r_j \Vert^3 - \eta\, \mathbf v_i$ | Asignación de conversación a slot por masa y prefijo compartido | §5.11 (simulación) |
+| 8 | **Tiempo emergente** | $dt_{\text{em}}/dt_{\text{gpu}} = \sqrt{1 - \gamma\, \Delta h / (I_i + \varepsilon)}$ | Envejecimiento de la prioridad: la espera dilata el tiempo y evita la inanición | §5.11 (simulación) |
+| 9 | **Métrica de Schwarzschild** | $ds^2$ con $1 - 2GM/(rc^2)$ | Horizonte de admisión: solo entra la masa que cabe en la memoria libre comprometida | §5.11 (simulación) |
+| 10 | **Ecuación de Friedmann** | $(\dot a/a)^2 = \tfrac{8\pi G}{3}\rho - k/a^2 + \Lambda$ | Anticipar el colapso de memoria; probada y apagada (no aportó en los escenarios simulados) | §5.11 |
+| 11 | **Ecuación Maestra unificada** | $\mathcal R_{\mu\nu} - \tfrac12 g_{\mu\nu}\mathcal R + \Lambda g_{\mu\nu} = \tfrac{8\pi G}{c^4}(\hat T - \gamma\, \partial_t \Delta h + \hat S)$ | "Estire y afloja": la masa estimada se corrige con la masa real observada | §5.11 (simulación) |
+| 12 | **Importancia de un recuerdo** | Memoria fija; lo importante se asigna y reasigna; las regiones prioritarias almacenan más | $w_{\text{región}}(1 + 0.5\,\text{usos}) + \text{densidad}/100$, con $w = 3$ prioritarias y $w = 1$ generales | §5.9 |
+
+### 14.2 Lógica
+
+- **Menor acción:** cada token debe gastar cómputo y memoria en proporción a la información que aporta, no de forma uniforme.
+- **Autopista no lineal:** conforme los tokens se resuelven se libera cómputo y memoria. La autopista no es una línea sino una estructura multidimensional, por capas, como un fractal: cada capa, cada token y cada conversación libera lo que ya no necesita.
+- **Pozos gravitatorios:** instrucciones, reglas y datos clave conservan su atención; el relleno se enfría y se va.
+- **La sesión es un GPS:** guarda dónde va la conversación para retomarla sin recorrer el camino de nuevo.
+- **Memoria como la mente humana:** espacio total fijo; olvidar no es borrar sino conservar fragmentos que permiten reconstruir y "volver a llegar a la misma información"; cruzar fragmentos sin relación aparente crea ideas nuevas.
+- **El software se adapta al hardware:** el procesador se indica por parámetros, la memoria se libera según el uso y el mismo código corre en cualquier arquitectura (CPU, Metal, CUDA, Vulkan).
+
+### 14.3 Reglas de negocio
+
+| # | Regla | Implementación | Parámetro |
+|---|---|---|---|
+| 1 | Una conversación persiste **24 h** desde la última actividad y después **se elimina** con su archivo | Tabla de sesiones con TTL; limpieza al arrancar y periódica | `--nai-sesion-ttl 86400` |
+| 2 | Retomar una conversación no debe reprocesar el historial | Restaurar el KV cache guardado | `--nai-sesiones DIR`, `"nai_session"` |
+| 3 | Las sesiones de un usuario no deben ser accesibles por otro | Id secreto ≥ 128 bits, SipHash-2-4 con clave, permisos 0600/0700, logs sin id | — |
+| 4 | Las instrucciones del sistema y el prompt nunca se olvidan antes que el texto generado | Masa protegida = 1 | — |
+| 5 | Cuando falta memoria, se libera lo de menor valor, no lo más antiguo | Ventana de menor masa; los tokens más recientes se respetan | `--nai-desalojo` |
+| 6 | No gastar cómputo en una petición ambigua | Triaje: aclarar o proponer hipótesis | `--nai-triaje` |
+| 7 | Toda optimización debe poder apagarse y compararse | Todo apagado por defecto; banco de pruebas contra vanilla y oficial | flags `--nai-*` |
+| 8 | Prioridad de almacenamiento para 19 temas: conciencia, ética, espiritualidad, empatía, lógica, filosofía, psique, biología, física, matemáticas, ciberseguridad, supervivencia, ingeniería, mecánica, aerodinámica, química, medicina tradicional, agricultura, arte | Peso 3 frente a 1 de los temas generales | `-r regiones.txt` |
+| 9 | La memoria tiene un tamaño fijo; al llenarse, lo menos importante baja de nivel (exacto → fragmento → pista) en vez de borrarse | Presupuesto de memoria reconstructiva | `--memoria BYTES` |
+| 10 | Un concepto debe poder activar recuerdos de regiones distintas para crear ideas | Refuerzo por concepto y cruce | `-c concepto` |
+| 11 | NAI debe poder conectarse a un proyecto padre (generador de API) | Campo `bloque_id` reservado | — |
+| 12 | No limitar el motor a una arquitectura de hardware | Funciones sobre logits y máscara, comunes a todos los backends | `-t`, `-ngl` |
+
+---
+
+## 15. Autoría y cómo citar
+
+### Autor
+
+**Ángelus Tenshi (Francisco Alejandro Cruz Castro)** · [github.com/FranciscoACruz](https://github.com/FranciscoACruz)
+
+Creador del **Motor NAI**: idea, marco teórico, diseño de las funciones y dirección del proyecto.
+
+### Aportación original
+
+La formulación del Motor NAI es un trabajo de investigación independiente que traslada principios de la física teórica y la termodinámica a la inferencia de modelos de lenguaje:
+
+- **Inercia latente ($\Delta h$)** y el *tronco de capas respirantes*: gastar cómputo solo donde hay "fricción de pensamiento".
+- **Masa semántica intrínseca ($I_i$)** de cada token y la **memoria gravitatoria** del KV cache: el *problema de los tres cuerpos* y la **Matriz S de dispersión gravitacional** ($\hat{S}_{\text{grav}}$).
+- La **expansión cosmológica del contexto** (fuerza de Hubble) y el **espacio-tiempo no cartesiano** con posición y tiempo emergentes.
+- La **Ecuación Maestra unificada** (*NAI Unified Master Equation*), base del planificador entrelazado.
+- La **autopista** de cómputo y memoria que se libera conforme los tokens se resuelven.
+- Las **sesiones persistentes como "GPS"** de la conversación, con ciclo de vida de 24 h.
+- La **memoria reconstructiva por regiones**, inspirada en la mente humana: memoria total fija, olvidar conservando fragmentos que permiten reconstruir, y cruzar fragmentos para crear ideas nuevas.
+
+El marco completo y el estado de cada fórmula están en [VISION.md](VISION.md).
+
+### Ecosistema
+
+El Motor NAI nace de **Aperion Engine**, motor de microservicios y sistemas distribuidos de alto rendimiento del mismo autor, donde se probaron primero los principios de menor acción, enrutamiento elástico y dispersión de estados. El campo `bloque_id` está reservado para conectar NAI con un proyecto padre: un generador de API de alto rendimiento.
+
+### Base
+
+NAI se construye sobre [llama.cpp](https://github.com/ggml-org/llama.cpp) y [ggml](https://github.com/ggml-org/ggml), de Georgi Gerganov y sus colaboradores, bajo licencia MIT. Todo el crédito del motor de inferencia base es de ese proyecto.
+
+### Cómo citar
+
+```bibtex
+@software{cruz_castro_nai_2026,
+  author = {Cruz Castro, Francisco Alejandro (Ángelus Tenshi)},
+  title  = {NAI Engine: High-Performance LLM Framework via Physics-Based Principles and llama.cpp Optimization},
+  year   = {2026},
+  url    = {https://github.com/FranciscoACruz/NAIEngine-llama.cpp}
+}
+```
 
 ---
 
 ## Licencia
 
 MIT, igual que llama.cpp. Ver `LICENSE`.
+
+Copyright © 2026 Ángelus Tenshi (Francisco Alejandro Cruz Castro), para las extensiones NAI.
