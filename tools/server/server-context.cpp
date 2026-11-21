@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <utility>
 #include <fstream>
+#include <random> // [NAI] clave de sesiones
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -525,9 +526,15 @@ struct server_slot {
         prompt.tokens.insert(spec_draft);
     }
 
+    std::function<void(const server_slot &)> nai_al_liberar; // [NAI] traza del planificador
+
     void release() {
         if (is_processing()) {
             GGML_ASSERT(task);
+
+            if (nai_al_liberar) {
+                nai_al_liberar(*this);
+            }
 
             SLT_INF(*this, "stop processing: n_tokens = %d, truncated = %d\n", prompt.n_tokens(), truncated);
 
@@ -933,6 +940,7 @@ public:
     }
 
     ~server_context_impl() {
+        nai_traza_cerrar(); // [NAI]
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
             // we don't call it again here to avoid double free
@@ -959,9 +967,116 @@ private:
     //   - al liberar el slot: se guarda el estado de la conversación de esa sesión
     //   - tras nai_sesion_ttl segundos sin actividad: se elimina sesión y archivo
     // =====================================================================
+    // [NAI] Traza del planificador (--nai-traza PREFIJO): registra las variables que usa el
+    // simulador tools/nai/sim (ocupación, masa que entra por paso, colas, tiempos por tarea)
+    // para calibrarlo con datos reales. PREFIJO-pasos.csv y PREFIJO-tareas.csv.
+    FILE *  nai_traza_pasos  = nullptr;
+    FILE *  nai_traza_tareas = nullptr;
+    int64_t nai_traza_t0     = 0;
+    int64_t nai_traza_n      = 0;
+
+    double nai_traza_ms(int64_t t_us) const {
+        return (t_us - nai_traza_t0) / 1000.0;
+    }
+
+    void nai_traza_init(const std::string & prefijo) {
+        nai_traza_pasos  = fopen((prefijo + "-pasos.csv").c_str(), "w");
+        nai_traza_tareas = fopen((prefijo + "-tareas.csv").c_str(), "w");
+        if (!nai_traza_pasos || !nai_traza_tareas) {
+            SRV_ERR("[NAI] no se pudo crear la traza con prefijo '%s'\n", prefijo.c_str());
+            nai_traza_cerrar();
+            return;
+        }
+        nai_traza_t0 = ggml_time_us();
+        fprintf(nai_traza_pasos, "t_ms,dt_ms,tokens_prefill,tokens_gen,kv_usado,capacidad,activos,cola,ret\n");
+        fprintf(nai_traza_tareas, "id,t_llegada_ms,t_inicio_ms,t_primer_token_ms,t_fin_ms,prompt,cacheados,salida,slot\n");
+        // el gancho por slot se instala al crear los slots (ver callback_on_release)
+        SRV_INF("[NAI] traza del planificador en '%s-pasos.csv' y '%s-tareas.csv'\n", prefijo.c_str(), prefijo.c_str());
+    }
+
+    void nai_traza_cerrar() {
+        if (nai_traza_pasos)  { fclose(nai_traza_pasos);  nai_traza_pasos  = nullptr; }
+        if (nai_traza_tareas) { fclose(nai_traza_tareas); nai_traza_tareas = nullptr; }
+    }
+
+    void nai_traza_tarea(const server_slot & s) {
+        if (!nai_traza_tareas || !s.task) {
+            return;
+        }
+        const int64_t ahora = ggml_time_us();
+        const int64_t t_gen = s.n_decoded > 0 ? s.t_start_generation : ahora;
+        fprintf(nai_traza_tareas, "%d,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d\n",
+                s.task->id, nai_traza_ms(s.task->t_llegada_us), nai_traza_ms(s.t_start_process_prompt),
+                nai_traza_ms(t_gen), nai_traza_ms(ahora), (int) s.task->n_tokens(), s.n_prompt_tokens_cache,
+                s.n_decoded, s.id);
+        fflush(nai_traza_tareas);
+    }
+
+    void nai_traza_paso(const llama_batch & b, int64_t t_ini_us, int ret) {
+        if (!nai_traza_pasos) {
+            return;
+        }
+        const int64_t ahora = ggml_time_us();
+        int n_pre = 0, n_gen = 0;
+        for (int32_t i = 0; i < b.n_tokens; ++i) {
+            const llama_seq_id sid = b.seq_id ? b.seq_id[i][0] : 0;
+            const server_slot * s  = (sid >= 0 && sid < (llama_seq_id) slots.size()) ? &slots[sid] : nullptr;
+            if (s && s->state == SLOT_STATE_GENERATING) { n_gen++; } else { n_pre++; }
+        }
+        int64_t kv = 0;
+        int activos = 0;
+        for (const auto & s : slots) {
+            kv += s.prompt.n_tokens();
+            activos += s.is_processing() ? 1 : 0;
+        }
+        fprintf(nai_traza_pasos, "%.3f,%.3f,%d,%d,%" PRId64 ",%u,%d,%zu,%d\n",
+                nai_traza_ms(ahora), (ahora - t_ini_us) / 1000.0, n_pre, n_gen, kv, llama_n_ctx(ctx_tgt),
+                activos, queue_tasks.queue_tasks_deferred_size(), ret);
+        if (++nai_traza_n % 64 == 0) {
+            fflush(nai_traza_pasos);
+        }
+    }
+
     nai::NaiSessionTable nai_tabla;
     std::string          nai_dir;
     int64_t              nai_ttl = 86400;
+    nai::ClaveSesion     nai_clave;   // clave secreta del hash (archivo .nai-clave en nai_dir)
+
+    uint64_t nai_handle(const std::string & id) const {
+        return nai::hash_sesion(id, nai_clave);
+    }
+
+    // Nombre corto para logs: nunca se escribe el id de sesión (es un secreto).
+    std::string nai_etiqueta(const std::string & id) const {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%08" PRIx64, nai_handle(id) >> 32);
+        return buf;
+    }
+
+    // Carga la clave de nai_dir/.nai-clave o la crea con 128 bits aleatorios (permisos 0600).
+    bool nai_cargar_clave() {
+        const auto ruta = std::filesystem::path(nai_dir) / ".nai-clave";
+        {
+            std::ifstream f(ruta, std::ios::binary);
+            if (f && f.read(reinterpret_cast<char *>(&nai_clave), sizeof(nai_clave)) && f.gcount() == (std::streamsize) sizeof(nai_clave)) {
+                return true;
+            }
+        }
+        std::random_device rd;
+        nai_clave.k0 = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        nai_clave.k1 = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        std::ofstream f(ruta, std::ios::binary | std::ios::trunc);
+        if (!f || !f.write(reinterpret_cast<const char *>(&nai_clave), sizeof(nai_clave))) {
+            return false;
+        }
+        f.close();
+        std::error_code ec;
+        std::filesystem::permissions(ruta, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::replace, ec);
+        SRV_INF("[NAI] clave de sesiones nueva creada en '%s' (las sesiones guardadas con otra clave expirarán solas)\n",
+                ruta.string().c_str());
+        return true;
+    }
 
     static int64_t nai_ahora() {
         return std::chrono::duration_cast<std::chrono::seconds>(
@@ -984,6 +1099,13 @@ private:
         std::filesystem::create_directories(nai_dir, ec);
         if (ec) {
             SRV_ERR("[NAI] no se pudo crear la carpeta de sesiones '%s': %s\n", nai_dir.c_str(), ec.message().c_str());
+            nai_dir.clear();
+            return;
+        }
+        // la carpeta contiene conversaciones completas: solo el dueño del proceso puede leerla
+        std::filesystem::permissions(nai_dir, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec);
+        if (!nai_cargar_clave()) {
+            SRV_ERR("[NAI] no se pudo leer ni crear la clave de sesiones en '%s'; sesiones desactivadas\n", nai_dir.c_str());
             nai_dir.clear();
             return;
         }
@@ -1023,7 +1145,7 @@ private:
             std::filesystem::remove(nai_ruta(ses.session_handle), ec);
             // ningún slot debe seguir asociado a una sesión expirada
             for (auto & sl : slots) {
-                if (!sl.nai_sesion.empty() && nai::hash_sesion(sl.nai_sesion) == ses.session_handle) {
+                if (!sl.nai_sesion.empty() && nai_handle(sl.nai_sesion) == ses.session_handle) {
                     sl.nai_sesion.clear();
                 }
             }
@@ -1045,16 +1167,23 @@ private:
         }
         nai_purgar();
 
+        const std::string etiqueta = nai_etiqueta(id);
+        if (id.size() < nai::NAI_SESION_ID_MIN_RECOMENDADO) {
+            SLT_WRN(slot, "[NAI] sesión %s: el id tiene %zu caracteres; usa un secreto aleatorio de al menos %zu "
+                    "(quien conozca el id puede recuperar la conversación)\n",
+                    etiqueta.c_str(), id.size(), nai::NAI_SESION_ID_MIN_RECOMENDADO);
+        }
+
         if (slot.nai_sesion == id) {
-            SLT_INF(slot, "[NAI] sesión '%s' ya cargada en el slot\n", id.c_str());
+            SLT_INF(slot, "[NAI] sesión %s ya cargada en el slot\n", etiqueta.c_str());
             return;
         }
         slot.nai_sesion = id;
 
-        const uint64_t handle = nai::hash_sesion(id);
+        const uint64_t handle = nai_handle(id);
         NaiSession ses;
         if (!nai_tabla.buscar(handle, ses)) {
-            SLT_INF(slot, "[NAI] sesión nueva '%s'\n", id.c_str());
+            SLT_INF(slot, "[NAI] sesión nueva %s\n", etiqueta.c_str());
             return;
         }
         if (mctx != nullptr || slot.can_speculate()) {
@@ -1068,7 +1197,7 @@ private:
         size_t n_tokens = 0;
         const size_t n_leidos = llama_state_seq_load_file(ctx_tgt, ruta.c_str(), slot.id, tokens.data(), tokens.size(), &n_tokens);
         if (n_leidos == 0) {
-            SLT_WRN(slot, "[NAI] no se pudo restaurar la sesión '%s' (archivo ausente o inválido)\n", id.c_str());
+            SLT_WRN(slot, "[NAI] no se pudo restaurar la sesión %s (archivo ausente o inválido)\n", etiqueta.c_str());
             slot.prompt.clear();
             llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, -1, -1);
             return;
@@ -1082,8 +1211,8 @@ private:
         slot.prompt.tokens.insert(tokens);
         llama_nai_limpiar_masa(ctx_tgt, slot.id);
 
-        SLT_INF(slot, "[NAI] sesión '%s' restaurada: %zu tokens, %.1f MiB en %.1f ms\n",
-                id.c_str(), n_tokens, n_leidos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
+        SLT_INF(slot, "[NAI] sesión %s restaurada: %zu tokens, %.1f MiB en %.1f ms\n",
+                etiqueta.c_str(), n_tokens, n_leidos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
     }
 
     // Al liberar el slot: guarda el estado de la conversación de su sesión.
@@ -1105,7 +1234,8 @@ private:
             return;
         }
 
-        const uint64_t handle = nai::hash_sesion(slot.nai_sesion);
+        const uint64_t handle = nai_handle(slot.nai_sesion);
+        const std::string etiqueta = nai_etiqueta(slot.nai_sesion);
         const std::string ruta = nai_ruta(handle);
         const std::string tmp  = ruta + ".tmp";
         const int64_t t0 = ggml_time_us();
@@ -1113,20 +1243,26 @@ private:
         std::error_code ec;
         if (n_escritos == 0) {
             std::filesystem::remove(tmp, ec);
-            SLT_WRN(slot, "[NAI] no se pudo guardar la sesión '%s'\n", slot.nai_sesion.c_str());
+            SLT_WRN(slot, "[NAI] no se pudo guardar la sesión %s\n", etiqueta.c_str());
             return;
         }
-        std::filesystem::rename(tmp, ruta, ec); // reemplazo atómico
-        std::filesystem::permissions(ruta, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        // permisos restringidos ANTES de hacerlo visible con su nombre final
+        std::filesystem::permissions(tmp, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
                 std::filesystem::perm_options::replace, ec);
+        std::filesystem::rename(tmp, ruta, ec); // reemplazo atómico
+        if (ec) {
+            std::filesystem::remove(tmp, ec);
+            SLT_WRN(slot, "[NAI] no se pudo guardar la sesión %s\n", etiqueta.c_str());
+            return;
+        }
 
         NaiSession ses;
         ses.session_handle = handle;
         ses.last_activity  = nai_ahora();
         nai_tabla.guardar(ses);
 
-        SLT_INF(slot, "[NAI] sesión '%s' guardada: %zu tokens, %.1f MiB en %.1f ms\n",
-                slot.nai_sesion.c_str(), n_guardar, n_escritos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
+        SLT_INF(slot, "[NAI] sesión %s guardada: %zu tokens, %.1f MiB en %.1f ms\n",
+                etiqueta.c_str(), n_guardar, n_escritos / 1048576.0, (ggml_time_us() - t0) / 1000.0);
     }
 
     llama_model   * model_dft = nullptr;
@@ -1404,6 +1540,18 @@ private:
             }
         }
 
+        // [NAI] memoria gravitatoria (sesgo de atención según masa semántica)
+        if (params_base.nai_gravedad > 0.0f) {
+            if (!llama_nai_set_gravedad(ctx_tgt, params_base.nai_gravedad, params_base.nai_gravedad_eps)) {
+                SRV_WRN("%s\n", "[NAI] --nai-gravedad no es compatible con la memoria de este modelo; se ignora");
+            }
+        }
+
+        // [NAI] traza del planificador
+        if (!params_base.nai_traza.empty()) {
+            nai_traza_init(params_base.nai_traza);
+        }
+
         // [NAI] sesiones persistentes
         nai_sesiones_init();
 
@@ -1567,6 +1715,10 @@ private:
                 }
                 queue_tasks.pop_deferred_task(id_slot);
             };
+
+            if (nai_traza_tareas) { // [NAI] traza del planificador
+                slot.nai_al_liberar = [this](const server_slot & s) { nai_traza_tarea(s); };
+            }
 
             slot.reset();
         }
@@ -3870,7 +4022,9 @@ private:
             }
         }
 
+        const int64_t nai_t_ini = ggml_time_us(); // [NAI] traza
         const int ret = llama_decode(ctx_tgt, batch_view);
+        nai_traza_paso(batch_view, nai_t_ini, ret);
 
         metrics.on_decoded(slots);
 

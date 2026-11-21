@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "inercia_latente.hpp" // [NAI] memoria gravitatoria
 
 #include <algorithm>
 #include <cassert>
@@ -1755,9 +1756,95 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         set_input_kq_mask_impl<float>(args, (float *) dst->data, causal_attn);
     }
 
+    // [NAI] memoria gravitatoria (opt-in, --nai-gravedad)
+    if (nai_mapa && nai_gamma > 0.0f && nai_mapa->activo() && !hparams.use_alibi && !ubatch->is_pos_2d()) {
+        nai_aplicar_gravedad(dst, ubatch);
+    }
+
     //const int64_t t_end = ggml_time_us();
 
     //LLAMA_LOG_ERROR("%s: kq mask time: %0.3f ms\n", __func__, (t_end - t_start)/1000.0);
+}
+
+//
+// [NAI] Memoria gravitatoria (Fórmula Maestra del README, aplicada al peso de atención)
+//
+// README:  K_i(t + dt) = K_i(t) · exp(-γ·dt / (I_i + ε))
+//
+// Escalar el vector K_i no "desvanece" un token: solo escala su logit q·k hacia 0, y si los
+// demás logits son negativos el token incluso GANA peso. El efecto que describe el README
+// (que los tokens de poca masa pierdan influencia de forma exponencial con el tiempo) se
+// obtiene exactamente multiplicando su PESO de atención por ese factor, es decir, sumando
+// al logit (antes del softmax) el sesgo
+//
+//     b_ij = ln exp(-γ·Δt_ij / (I_j + ε)) = -γ·Δt_ij / (I_j + ε),   Δt_ij = pos_i - pos_j ≥ 0
+//
+// La máscara KQ de llama.cpp ya es aditiva (0 = conservar, -inf = ocultar), así que el sesgo
+// se suma ahí y funciona igual con y sin flash attention, en cualquier backend.
+//
+//   - I_j = masa semántica (sorpresa normalizada, ver inercia_latente.hpp).
+//   - Tokens con masa protegida (prompt, sistema, sin medir) no reciben sesgo: su "pozo
+//     gravitatorio" es indefinido, como pide el README.
+//   - Δt lineal en la distancia es también el "corrimiento al rojo" de la sección 11.5:
+//     con z ∝ distancia, ambas secciones se reducen a este mismo término (tipo ALiBi).
+//
+void llama_kv_cache::nai_aplicar_gravedad(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    const int64_t n_kv     = dst->ne[0];
+    const int64_t n_tokens = ubatch->n_tokens;
+    const bool    es_f16   = dst->type == GGML_TYPE_F16;
+    const float   piso     = -1.0e4f; // suficiente para anular el peso sin salir del rango de f16
+
+    // La masa solo depende de (secuencia, celda): se precalcula coef_j = γ/(I_j + ε) una vez por
+    // secuencia y el ciclo interno queda en  b = -coef_j · (p_i - p_j).  coef_j = 0 => sin sesgo.
+    std::vector<float>     coef(n_kv, 0.0f);
+    std::vector<llama_pos> pos (n_kv, 0);
+    llama_seq_id seq_cache = -1;
+    bool         hay_masa  = false;
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id seq_id = ubatch->seq_id[i][0];
+        const llama_pos    p1     = ubatch->pos[i];
+        const auto &       cells  = v_cells.at(seq_to_stream[seq_id]);
+
+        if (seq_id != seq_cache) {
+            seq_cache = seq_id;
+            hay_masa  = false;
+            for (int64_t j = 0; j < n_kv; ++j) {
+                coef[j] = 0.0f;
+                if (cells.is_empty(j)) {
+                    continue;
+                }
+                pos[j] = cells.pos_get(j);
+                const float masa = nai_mapa->obtener(seq_id, pos[j]);
+                if (masa < nai::MASA_PROTEGIDA) {
+                    coef[j]  = nai_gamma / (masa + nai_eps);
+                    hay_masa = true;
+                }
+            }
+        }
+        if (!hay_masa) {
+            continue; // nada que atenuar en esta secuencia (p. ej. solo prompt)
+        }
+
+        const uint64_t idst = (uint64_t) n_kv * i;
+        for (int64_t j = 0; j < n_kv; ++j) {
+            if (coef[j] == 0.0f || pos[j] >= p1) {
+                continue;
+            }
+            if (es_f16) {
+                ggml_fp16_t & d = ((ggml_fp16_t *) dst->data)[idst + j];
+                const float m = ggml_fp16_to_fp32(d);
+                if (std::isfinite(m)) {
+                    d = ggml_fp32_to_fp16(std::max(m - coef[j] * (float) (p1 - pos[j]), piso));
+                }
+            } else {
+                float & d = ((float *) dst->data)[idst + j];
+                if (std::isfinite(d)) {
+                    d = std::max(d - coef[j] * (float) (p1 - pos[j]), piso);
+                }
+            }
+        }
+    }
 }
 
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

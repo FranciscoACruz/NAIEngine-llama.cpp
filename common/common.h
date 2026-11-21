@@ -563,6 +563,9 @@ struct common_params {
     bool show_timings      = true;  // show timing information on CLI
     bool ctx_shift         = false; // context shift on infinite text generation
     bool nai_desalojo      = false; // [NAI] en el context shift, desalojar la ventana de menor masa semántica
+    float nai_gravedad     = 0.0f;  // [NAI] memoria gravitatoria: gamma del sesgo de atención (0 = desactivada)
+    float nai_gravedad_eps = 0.05f; // [NAI] epsilon de la fórmula -gamma*dt/(masa+eps)
+    std::string nai_traza;          // [NAI] prefijo de la traza del planificador (vacío = desactivada)
     bool nai_triaje        = false; // [NAI] (CLI) triaje de prompts ambiguos antes de generar
     std::string nai_sesiones_dir;           // [NAI] carpeta de sesiones persistentes (vacío = desactivado)
     int32_t     nai_sesion_ttl  = 86400;    // [NAI] segundos sin actividad antes de eliminar una sesión (24 h)

@@ -2927,12 +2927,8 @@ uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
     return (uint32_t) model->target_layer_ids.size();
 }
 
-uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
-    if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
-        return 0;
-    }
-
-    const ggml_tensor * tensor = model->tok_embd;
+// copia un tensor del modelo a F32 (dequantizando si hace falta); devuelve el número de elementos
+static uint32_t llama_model_tensor_to_f32(const ggml_tensor * tensor, float * out) {
     const size_t nelements = ggml_nelements(tensor);
     GGML_ASSERT(nelements <= UINT32_MAX); // for the return type
 
@@ -2960,4 +2956,23 @@ uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out)
     }
 
     return (uint32_t) nelements;
+}
+
+uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
+    if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
+        return 0;
+    }
+    return llama_model_tensor_to_f32(model->tok_embd, out);
+}
+
+// [NAI] cabeza de salida (output.weight) en F32, [n_vocab][n_embd]. En modelos con embeddings
+// atados llama.cpp la apunta a token_embd, así que siempre es la cabeza real del modelo.
+uint32_t llama_model_get_output_head(const struct llama_model * model, float * out) {
+    const ggml_tensor * t = model->output;
+    if (model->vocab.n_tokens() == 0 || t == nullptr ||
+        t->ne[0] != model->hparams.n_embd || t->ne[1] != (int64_t) model->vocab.n_tokens() ||
+        ggml_n_dims(t) > 2) {
+        return 0;
+    }
+    return llama_model_tensor_to_f32(t, out);
 }

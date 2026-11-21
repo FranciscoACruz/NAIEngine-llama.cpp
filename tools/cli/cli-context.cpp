@@ -201,7 +201,7 @@ bool cli_context::push_user_message(const std::string & text) {
         }
 
         if (res.modo == ModoTriaje::PROPUESTA_HIPOTESIS) {
-            printf("\n[NAI - Hipótesis]: %s\n\n", res.mensaje_respuesta.c_str());
+            printf("\n[NAI - Aviso]: %s\n\n", res.mensaje_respuesta.c_str());
             text_procesado = res.contexto_inyectado + text;
         }
     }

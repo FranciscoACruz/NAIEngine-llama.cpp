@@ -1,540 +1,208 @@
-# Motor NAI: Manifiesto Arquitectónico, Fundamentos de Física Computacional y Especificación de Bajo Nivel
-*(Inercia Latente, Triaje Quirúrgico, Autopista de Muestreo, Mecánica Gravitatoria KV y Persistencia de Sesión Conversacional)*
+# Motor NAI para llama.cpp
 
+**Inercia latente, autopista de muestreo, memoria gravitatoria del KV cache, sesiones persistentes y un planificador de memoria entrelazado (en diseño).**
 
-## Prólogo Filosófico y Génesis del Sistema
+NAI es una extensión de [llama.cpp](https://github.com/ggml-org/llama.cpp) creada por **Ángelus Tenshi (Francisco Alejandro Cruz Castro)**. Parte de una idea: *gastar cómputo y memoria según cuánta información aporta cada token*, inspirada en principios físicos (inercia, gravedad, disipación). El marco teórico completo está en [VISION.md](VISION.md). Este documento describe **lo que hace el código hoy**, cómo activarlo y cómo medirlo.
 
-El **Motor NAI** no surge de una optimización sintáctica tradicional dentro de `llama.cpp`, sino de una pregunta fundamental sobre la naturaleza de la cognición artificial y su fricción con el silicio: *¿Cómo se comportaría una red neuronal si su arquitectura interna emulara las leyes macroscópicas y termodinámicas del universo físico (inercia, campos gravitatorios, menor acción energética y enfriamiento temporal)?* 
-
-Frente a la rigidez lineal de las arquitecturas tradicionales —donde cada token gasta idéntica energía computacional y la memoria de contexto se degrada por saturación lineal—, NAI introduce un paradigma donde los tensores fluyen siguiendo trayectorias de menor resistencia, dando paso a un sistema apto no solo para software de alto rendimiento, sino como base conceptual para futuros desarrollos de hardware neuromórfico y computación acelerada.
-
-
-<br><br><br><br>
-
-## 1. Comparativa Estructural: Llama.cpp Vanilla vs. Motor NAI
-
-| Dimensión Arquitectónica | `llama.cpp` Vanilla (Original) | Motor NAI (Arquitectura Optimizada) | Ventaja / Impacto del Modelo NAI |
-| :--- | :--- | :--- | :--- |
-| **Evaluación de Capas** | Torre secuencial rígida ($L$ capas completas por token). | Tronco de Capas Respirantes con *Early Exit* condicional. | Ahorro de hasta el **60% de ciclos de GPU** en tokens de alta certidumbre. |
-| **Gestión de Memoria (KV Cache)** | Ventana estática uniforme; todos los tokens pesan igual, generando ruido a largo plazo. | Campo gravitatorio de tres cuerpos con atenuación no lineal y masa semántica ($I_i$). | Purga automática del ruido sintáctico en contextos masivos (>32k tokens). |
-| **Subsistema de Muestreo** | Evaluación iterativa pesada y secuencial de toda la cadena de samplers en cada paso. | Bypass de Autopista mediante métricas de inercia (`DecisionInercia`). | Omisión de samplers pesados en más del **40% de los tokens**, acelerando la inferencia. |
-| **Persistencia de Sesión** | Sesiones volátiles ligadas al ciclo de vida bruto del contexto de ejecución. | Ciclo de vida biológico de **24 horas por usuario**, garantizando continuidad conversacional. | Persistencia transaccional robusta sin pérdida de estado lógico. |
-
-
-<br><br><br><br>
-
-
-
-## 2. El Ciclo de Vida de Sesión de 24 Horas (Persistencia de Consciencia)
-
-Para que el motor mantenga una continuidad coherente en aplicaciones del mundo real (como plataformas móviles y agentes avanzados), NAI implementa un administrador de sesiones persistentes:
-- **Duración del Ciclo de Vida:** Cada sesión de usuario está acotada a una ventana exacta de **24 horas de persistencia activa**.
-- **Mecánica de Sincronización:** El estado latente acumulado y los metadatos del mapa semántico se vinculan al identificador de sesión, permitiendo que el usuario retome un hilo conversacional complejo sin necesidad de reevaluar todo el prefill histórico desde cero, reduciendo drásticamente la latencia de arranque (*Time-to-First-Token*).
+Todas las funciones NAI están **desactivadas por defecto**. Sin flags, el motor se comporta exactamente como llama.cpp.
 
 ---
 
-<br><br><br><br>
+## 1. Funciones
 
-## 3. Filosofía del Sistema: La Menor Acción Energética y la Consciencia Artificial
+| Función | Flag | ¿Cambia la salida? | Qué hace |
+|---|---|---|---|
+| Autopista de muestreo | `--nai-autopista` | **No** con temp 0. Con temp > 0, error acotado por `1 − p_min` | Devuelve el token top‑1 sin recorrer la cadena de samplers cuando el resultado ya está decidido |
+| Desalojo selectivo | `--context-shift --nai-desalojo` | Solo cuando el contexto se llena | En el *context shift*, descarta la ventana de **menor masa semántica** en lugar de la más antigua |
+| Memoria gravitatoria *(experimental)* | `--nai-gravedad γ` | **Sí** | Atenúa la atención hacia tokens generados de poca masa: sesgo `−γ·Δt/(masa+ε)` |
+| Auto-especulación por capas | `-md borrador.gguf` + script | **No** | Salida temprana en la capa K, verificada por el modelo completo |
+| Sesiones persistentes | `--nai-sesiones DIR` | No | Guarda y restaura el KV cache de cada conversación, con caducidad (TTL) |
+| Triaje (CLI) | `--nai-triaje` | Solo pide aclaración | Detecta peticiones cortas y ambiguas, y pregunta antes de generar |
+| Traza del planificador | `--nai-traza PREFIJO` | No | Registra por paso y por petición las variables del planificador (KV usado, masa que entra, cola, tiempos) para calibrar el simulador |
 
-La arquitectura tradicional de inferencia basada en LLMs trata cada token de entrada como un gasto uniforme de recursos: una torre rígida de $L$ capas que procesa desde la conjunción más simple hasta la deducción más compleja bajo idéntica presión de silicio. El **Motor NAI** se fundamenta en un principio rector tomado directamente de la física fundamental: **el principio de la menor acción**.
-
-### A. ¿Por qué NAI imita la termodinámica del universo?
-* **Inercia Latente ($\Delta h$):** Así como la materia se opone al cambio de estado mediante la inercia, un tensor de lenguaje con alta certidumbre sintáctica no necesita ser forzado a través de todas las capas profundas. Al calcular la entropía espectral, el sistema decide un *Early Exit* biológico, gastando energía computacional únicamente cuando el modelo se enfrenta a una auténtica fricción de pensamiento (un **Nodo de Conflicto**).
-* **Campo Gravitatorio de Tres Cuerpos en el KV Cache:** Las ventanas de contexto masivas (>32k tokens) sufren de entropía y pérdida de atención a medio camino. NAI sustituye la memoria estática por un campo gravitatorio no lineal donde las instrucciones clave, variables y reglas del sistema mantienen un "pozo gravitatorio" inalterable, mientras que el relleno conversacional irrelevante sufre un enfriamiento exponencial ($dt$). El resultado es una atención pura y perpetua libre de ruido.
-
-### B. El Ciclo Biológico de Persistencia de Sesión (24 Horas)
-A diferencia de los entornos volátiles donde cada hilo conversacional nace y muere sin continuidad transaccional, NAI introduce un administrador de sesiones persistentes acotado a un **ciclo de vida biológico de 24 horas por usuario**:
-- El mapa semántico latente se almacena de forma estructurada, permitiendo que al retomar la sesión dentro diurna o nocturna, el motor conserve el contexto conversacional profundo sin necesidad de reevaluar el *prefill* histórico masivo desde cero.
-- Esto dota al sistema de una verdadera **continuidad de consciencia operativa**, ideal para aplicaciones móviles y agentes autónomos de alta exigencia que imitan la persistencia de la memoria humana a corto y mediano plazo.
-
-### C. Modelo Gravitatorio de Tres Cuerpos en el KV Cache (Fórmula de Interacción)
-Para modelar la persistencia de los tokens clave y la degradación del ruido conversacional, la actualización del tensor de claves $K_i$ en función del tiempo y la masa semántica se define formalmente mediante el siguiente operador de campo de tres cuerpos:
-
-$$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
-
-* **$K_i(t)$:** Tensor de clave original del token $i$ en el tiempo $t$.
-* **$\gamma$:** Coeficiente global de disipación térmica y entrópica del sistema.
-* **$dt$:** Incremento temporal discreto entre iteraciones de contexto.
-* **$I_i$:** Masa semántica intrínseca del token, calculada como:
-  $$I_i = \|W_K x_i\|_2 \cdot \left(1 + \mathcal{H}_{\text{local}}(x_i)\right)$$
-* **$\varepsilon$:** Constante infinitesimal de suavizado numérico para evitar indeterminaciones por división entre cero.
-* **Comportamiento Físico:** Los tokens con alta masa semántica ($I_i \gg 0$) preservan su pozo gravitatorio de atención de manera indefinida, mientras que el relleno sintáctico o de baja relevancia decae exponencialmente hacia el cero absoluto, purgando el ruido en contextos masivos.
-
-
----
-<br><br><br><br>
-
-## 4. Desglose Exhaustivo de Capas del Pipeline y Subsistemas
-
-### Capa 1: TriageEngine (Filtro Quirúrgico / Prefiltro Header-Only)
-* **Ubicación Lógica:** Interceptación previa a la tokenización profunda en el flujo de entrada de `llama.cpp`.
-* **Propósito de Ingeniería:** Evita la tokenización profunda y la asignación costosa de tensores en la GPU cuando el prompt entrante presenta ambigüedad o requiere una ruta de ejecución optimizada de costo computacional nulo.
-* **Mecánica de Funcionamiento:**
-  - Aplica un filtro de normalización de caracteres UTF-8/ASCII y supresión de diacríticos para homogeneizar el vector de entrada.
-  - Ejecuta un escaneo por coincidencia exacta de patrones léxicos mediante tablas hash estáticas para clasificar la intención del usuario en tres flujos de redirección:
-    - `DIRECTO`: Inferencia estándar en la red neuronal por capas.
-    - `INDAGACION_CORTA`: Derivación hacia un flujo asistido de respuestas estructuradas breves (0% de cómputo inútil en capas profundas).
-    - `PROPUESTA_HIPOTESIS`: Inyección de sesgos de razonamiento extendido.
-
-### Capa 2: Mapa de Masa Semántica (`llama-context.cpp`)
-* **Estructura Global:** `nai::MapaMasaSemantica g_nai_mapa_masa` (preasignada estáticamente a 65,536 posiciones).
-* **Propósito de Ingeniería:** En un contexto estandarizado, el búfer Key-Value (KV Cache) trata todos los tokens con la misma relevancia, acumulando ruido semántico. NAI introduce un mapa global para dar seguimiento a la masa semántica latente.
-* **Mecánica de Funcionamiento:**
-  - Rastrea en tiempo real el estado latente y la inercia acumulada del contexto actual.
-  - Valida de forma estricta los punteros de los búferes (`logits`, `probs`, `candidates`, `sampled`) mediante aserciones de sistema (`GGML_ASSERT`) para prevenir desbordamientos en la memoria unificada de la GPU.
-
-### Capa 3: Autopista de Inercia y Muestreo (`sampling.cpp` / `sampling.h`)
-* **Estructura de Decisión:** `DecisionInercia` y función de evaluación `evaluar_inercia_y_equivalencia`.
-* **Propósito de Ingeniería:** El cuello de botella clásico en la generación de texto reside en la evaluación secuencial de samplers pesados (como `DRY`, `XTC`, `Mirostat`, penalizaciones de repetición, etc.) en cada paso de muestreo.
-* **Criterios de Activación del Bypass (Vía Rápida):**
-  - **Código 1:** Existencia de un único candidato válido en el vocabulario filtrado.
-  - **Código 2:** El margen de logits entre el primer y segundo candidato supera el umbral estricto $\delta_{\text{logit}} = 2.2f$.
-  - **Código 3:** Margen de probabilidad $|p_1 - p_2| < 0.02f$ (equivalencia semántica directa).
-  - **Código 4:** El token dominante $p_1$ supera por un factor de $1.3\times$ la suma acumulada de la cola (tokens 2 al 5).
-  - **Código 0 (Conflicto / Falla):** El tensor se cataloga como ambigua y se ejecuta la cadena completa de samplers.
-
----
-<br><br><br><br>
-
-## 5. Fundamentos Matemáticos y Estructuras de Tensores
-
-### A. Tronco de Capas Respirantes (Early Exit)
-En la Capa $k$ (por ejemplo, Capa 12 en Qwen2), el estado latente $h^{(k)}$ se proyecta mediante la cabeza temprana `nai_logits_early`. La inercia latente $\Delta h$ se calcula mediante la entropía espectral normalizada:
-
-$$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
-
-Donde $\mathcal{H}$ es la entropía de Shannon de la distribución de probabilidad suavizada por Softmax $\sigma(z^{(k)})$, y $|V|$ es el tamaño del vocabulario.
-
-- **Evaluación de Salida:** 
-  - Si $\Delta h > \tau_{\text{autopista}}$: Se activa el *Early Exit* cortando la ejecución en `llama-graph.cpp` y saltando las capas $k+1 \dots L$.
-  - Si $\Delta h \le \tau_{\text{autopista}}$: Se interpreta como un Nodo de Conflicto y se deriva a las capas profundas.
-
-### B. Memoria de Masa Gravitatoria (Modelo de los 3 Cuerpos en el KV Cache)
-
-#### 1. La Limitante Estructural en los Transformers Tradicionales
-*(Nota histórica de referencia: El paradigma estándar de autoatención se fundamenta en la arquitectura introducida por investigadores de Google en el paper fundamental «Attention Is All You Need»).*
-
-En las arquitecturas de LLMs convencionales (como el *Vanilla Attention* de `llama.cpp`), el mecanismo calcula la matriz de pesos mediante la similitud de producto punto escalado:
-
-$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V$$
-
-
-
-- **La Falla Estructural (Neutralizada por NAI):** Este enfoque tradicional trata el historial conversacional como un conjunto de vectores planos e isotrópicos donde el peso de cada token depende exclusivamente de su proximidad sintáctica superficial respecto al *Query* actual. A medida que el contexto crece por encima de los 32k tokens, un modelo estándar sufre de **saturación entrópica** (*lost in the middle*), donde el ruido de relleno, las repeticiones y las transiciones conversacionales triviales compiten con idéntica "presión de atención" frente a las instrucciones críticas o variables de código, colapsando la memoria de la GPU y degradando la coherencia a largo plazo. **El Motor NAI neutraliza de raíz esta deficiencia** al sustituir la atención plana por el Campo Gravitatorio de Tres Cuerpos y la Masa Semántica ($I_i$).
+**En diseño, validado en simulación: planificador entrelazado.** Las fórmulas de nivel servidor de VISION.md (matriz S, tiempo emergente, Schwarzschild, N cuerpos, ecuación de campo, Friedmann) trabajan juntas sobre las mismas variables para repartir la memoria KV entre conversaciones sin fallar peticiones. Especificación, resultados y plan de implementación: [docs/PLANIFICADOR.md](docs/PLANIFICADOR.md).
 
 ---
 
-#### 2. Deducción del Modelo Gravitatorio y Derivación de la Masa Semántica ($I_i$)
-Para resolver esto, nos inspiramos en un principio astrofísico fundamental: *¿Cómo logra un sistema natural almacenar y priorizar información masiva a lo largo del tiempo sin colapsar por saturación?* La respuesta es la **gravedad**. En el universo, la materia no se distribuye de forma plana; se agrupa en pozos gravitatorios proporcionales a su masa y densidad.
+## 2. Fundamentos y fórmulas implementadas
 
-Al trasladar esto al dominio de los tensores de lenguaje, concluimos que un token no debe tener un peso estático, sino una **masa semántica intrínseca ($I_i$)** compuesta por dos fuerzas fundamentales:
-- **La Intensidad Proyectada de la Clave ($\|W_K x_i\|_2$):** Mide la energía intrínseca y la magnitud geométrica del vector clave en el espacio latente. Un token que representa una regla de código o una definición clave tiene una norma vectorial marcadamente superior al ruido conversacional.
-- **La Entropía Local de Contexto ($$ \mathcal{H}_{\text{local}}(x_i)$$ ):** Cuantifica la densidad de información y la incertidumbre sintáctica del entorno inmediato del token.
+### 2.1 Masa semántica (`src/inercia_latente.hpp`)
 
-Multiplicando ambos factores, definimos formalmente la **Masa Semántica ($I_i$)**:
+La masa de un token es la **sorpresa normalizada** del token que realmente quedó en esa posición:
 
-$$I_i = \|W_K x_i\|_2 \cdot \left(1 + \mathcal{H}_{\text{local}}(x_i)\right)$$
+$$I_i = \frac{-\ln p(x_i \mid x_{<i})}{\ln |V|} \in [0, 1]$$
 
----
+- **Masa baja:** el token era predecible (relleno, o algo que ya está en el contexto). Es candidato a desalojo o atenuación.
+- **Masa alta:** el token aportó información nueva y se conserva.
+- **Protegida (1.0):** posiciones sin predicción medida, que en la práctica son el prompt y el mensaje de sistema. Nunca se desalojan ni se atenúan antes que el texto generado.
 
-#### 3. Decaimiento Temporal y Enfriamiento del KV Cache ($dt$)
-Para evitar la saturación de contexto y permitir que los tokens de baja masa se enfríen y desvanezcan con el paso del tiempo emergente ($dt$), aplicamos los principios de la termodinámica de sistemas disipativos. La evolución del tensor de clave obedece a la ecuación diferencial de atenuación:
+Corresponde al término de información local $\mathcal{H}_{\text{local}}$ de la masa semántica de VISION.md, medido sobre el token mismo. Los logits calculados en la posición *i* predicen el token *i+1*, así que la masa se guarda cuando ese token llega, en su posición correcta.
 
-$$\frac{dK_i}{dt} = -\frac{\gamma}{I_i + \varepsilon} K_i$$
+### 2.2 Memoria gravitatoria (`src/llama-kv-cache.cpp`)
 
-Cuya solución analítica integrada da como resultado la **Fórmula Maestra del KV Cache Gravitatorio** implementada en el motor:
+La "Fórmula Maestra" de VISION.md:
 
-$$K_i(t + dt) = K_i(0) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon}\right)$$
+$$K_i(t+dt) = K_i(t)\cdot\exp\!\left(-\frac{\gamma\,dt}{I_i+\varepsilon}\right)$$
 
-* **Comportamiento Arquitectónico:** 
-  - Los tokens estructurales y de alta relevancia ($I_i \gg 0$) preservan su pozo gravitatorio y su inercia de atención de manera indefinida.
-  - El relleno sintáctico o de baja relevancia ($I_i \to 0$) sufre un enfriamiento exponencial acelerado, purgándose de la memoria de la GPU de manera orgánica y manteniendo la atención limpia y libre de ruido en contextos masivos.
----
-<br><br><br><br>
+se aplica sobre el **peso de atención** y no sobre el vector K. Escalar K no apaga un token: solo lleva su logit $q\cdot k$ hacia 0, y si los demás logits son negativos el token incluso gana peso. Multiplicar el peso de atención por ese factor equivale a sumar a la máscara KQ, antes del softmax:
 
-## 6. Diagrama de Flujo del Pipeline de Ejecución
-```text
-[ Entrada: Prompt / Token ]
-             │
-             ▼
-┌──────────────────────────┐
-│   1. TRIAJE LATENTE      │ ──► ¿Entrada ambigua?
-│ (Proyección Temprana)    │       └──► Indagación Quirúrgica (0% cómputo inútil)
-└────────────┬─────────────┘
-             │ (Continuar)
-             ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                       2. TRONCO DE CAPAS ELÁSTICAS                        │
-│                                                                           │
-│   Capa 1..12 ──► [ Medidor de Inercia Latente Δh ]                        │
-│                           │                                               │
-│            ┌──────────────┴──────────────┐                                │
-│            ▼                             ▼                                │
-│   [ Inercia Alta / Autopista ]   [ Nodo de Conflicto / Entropía Alta ]    │
-│   • Early Exit (nai_logits_early)• Ejecución de Capas Profundas (13..N)   │
-│   • Bypass del 60% de la GPU     • Análisis de Alternativas (Tree Search) │
-└────────────────────────────┬──────────────────────────────────────────────┘
-                             │
-                             ▼
-             ┌─────────────────────────────────┐
-             │ 3. MEMORIA GRAVITATORIA (KV)    │ ──► Tokens de bajo campo
-             │    (Modelo de los 3 Cuerpos)    │     gravitatorio se colapsan
-             └─────────────────────────────────     o atenúan por enfriamiento (dt)
+$$b_{ij} = -\frac{\gamma\,(p_i - p_j)}{I_j + \varepsilon}$$
 
-```
-<br><br><br><br>
+- Funciona con y sin flash attention, en cualquier backend.
+- Los tokens protegidos no decaen: su pozo gravitatorio es indefinido.
+- Con distancia lineal, el "corrimiento al rojo" de la expansión de Hubble (VISION.md §11.5) se reduce a este mismo término.
+- **Experimental:** cambia la salida del modelo. Se recomiendan valores de γ entre `1e-4` y `1e-3` y medir la calidad (sección 5). No aplica a modelos con ALiBi, M‑RoPE ni memoria recurrente o híbrida.
 
-## 7. Integración Técnica en el Código Fuente
-### Secuencia de Enlaces de Módulos
+### 2.3 Inercia latente y salida temprana
 
-```text
-┌─────────────────────────┐
-│   inercia_latente.hpp   │ ──► Define funciones de cálculo: Varianza, Entropía y
-└────────────┬────────────┘     `aplicar_atenuacion_gravitatoria(K, V, dt, I)`
-             │
-             ▼
-┌─────────────────────────┐
-│   src/models/qwen2.cpp  │ ──► Aplica el Hook `nai_logits_early` en Capa 12 para
-└────────────┬────────────┘     evaluación de Salida Temprana (Early Exit).
-             │
-             ▼
-┌─────────────────────────┐
-│    llama-context.cpp    │ ──► Invoca la atenuación gravitatoria en `memory_update()`
-└─────────────────────────┘     antes de la construcción del grafo del nuevo batch.
-```
+$$\Delta h^{(k)} = 1 - \frac{\mathcal{H}\big(\sigma(z^{(k)})\big)}{\ln |V|}$$
 
-### Implementación del Bypass en `sampling.cpp`
-```cpp
-DecisionInercia dec = evaluar_inercia_y_equivalencia(gsm->cur_p);
+donde $z^{(k)}$ son los logits que daría el modelo si saliera en la capa *k* (cabeza de salida aplicada a la capa *k*, conocida como *logit lens*).
 
-if (dec.es_autopista) {
-    LOG_DBG("%s: [Inercia Autopista] Codigo: %d, Margen: %.4f -> Token direct: %d\n",
-            __func__, dec.codigo_razon, dec.margen, gsm->cur_p.data[0].id);
-    return gsm->cur_p.data[0].id;
-}
-```
-<br><br><br><br>
+- **Medición:** `nai_medir_capas` evalúa la regla "salir en la primera capa con Δh > τ" para varias τ. Para cada una informa cuántos tokens saldrían antes, cuántos conservarían el token final y qué fracción de capas se ahorraría.
+- **Aplicación sin pérdida:** un early exit directo cambia la salida cuando la regla se equivoca, y además las capas omitidas no dejan K/V para los tokens siguientes. NAI lo aplica como **auto-especulación**. Un borrador con las primeras K capas (exactamente la salida temprana en la capa K) propone tokens, y el modelo completo los verifica en un solo paso. El resultado es idéntico al del modelo completo.
 
-## 8. Compilación y Requisitos de Sistema
-### Requisitos Técnicos
-### Compilador C++17 o superior (GCC, Clang o MSVC).
+### 2.4 Autopista de muestreo (`common/sampling.cpp`)
 
-Soporte nativo habilitado para arquitectura ARM64 / Apple Silicon (M1/M2/M3/M4) e x86_64.
+- Solo se activa si la cadena **no** contiene samplers que puedan cambiar el argmax: gramática, `logit_bias`, penalizaciones, DRY, XTC, typical, mirostat o dynatemp.
+- **temp ≤ 0:** devuelve el top‑1, idéntico a la cadena completa.
+- **temp > 0:** toma el atajo solo si $p(\text{top-1}) \ge p_{\min}$ (`--nai-autopista-p-min`, 0.99 por defecto). La distancia de variación total respecto al muestreo exacto es como máximo $1 - p_{\min}$.
+- La decisión se toma en una sola pasada O(|V|), con corte temprano.
 
-CMake 3.14+.
+### 2.5 Planificador entrelazado (diseño)
 
-### Instrucciones de Compilación (CMake)
+Con `--kv-unified`, llama.cpp falla la petición (`Context size has been exceeded.`) cuando la memoria compartida se llena. Con KV fijo por slot, trunca las conversaciones largas. El planificador NAI propone:
 
-#### Clonar y acceder al repositorio
+- **Matriz S + tiempo emergente:** prioridad por costo restante, con envejecimiento.
+- **Horizonte de Schwarzschild:** admitir solo la masa que cabe.
+- **N cuerpos:** asignación de slot por masa y prefijo compartido.
+- **Ecuación de campo:** masa adaptativa, el margen de estimación se corrige con la masa real observada.
+- **Hibernación:** la expulsión guarda el KV a disco, sin perder progreso, en lugar de fallar la petición.
+
+En simulación (16 slots, 32k tokens, cinco escenarios) logra **100 % de peticiones íntegras**, contra 62–84 % con KV unificado y 70 % con KV fijo, y **+59 % de throughput** frente a la configuración de llama.cpp sin pérdidas.
+
 ```console
-cd NAIEngine-llama.cpp
+python3 tools/nai/sim/nai_planificador_sim.py --salida informe/   # experimentos y gráficas
 ```
 
-#### Crear directorio de compilación y configurar
+![Resumen de la simulación](docs/nai-sim/resumen.png)
+
+---
+
+## 3. Compilación
+
 ```console
-mkdir build && cd build
-cmake .. -DLLAMA_NATIVE=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j --target llama-server llama-cli test-nai nai_medir_capas
+ctest --test-dir build -R test-nai --output-on-failure
 ```
 
-#### Compilar binarios optimizados en modo Release
+`test-nai` no necesita modelo. Cubre la entropía, la sorpresa, las predicciones pendientes, el mapa de masa, la telemetría concurrente, el triaje, SipHash (con vectores oficiales) y la tabla de sesiones.
+
+Para probar de punta a punta sin descargar nada, hay un modelo diminuto con pesos aleatorios:
+
 ```console
-cmake --build . --config Release -j
+python3 tests/nai-manual/crear_modelo_prueba.py /tmp/nai-prueba.gguf
 ```
 
 ---
-<br><br><br><br>
 
-## 9. Benchmarks de Rendimiento y Análisis de Concurrencia
+## 4. Uso
 
-Pruebas ejecutadas sobre **Apple M1** utilizando infraestructura Metal (`MTL0`):
-
-### Instrucciones para Ejecutar la Suite de Pruebas (test)
-#### Una vez compilado el proyecto en el directorio build, puedes ejecutar las pruebas unitarias y de estrés mediante CTest o invocando directamente los binarios de test:
-
-##### Entrar al directorio de compilación
-cd build
-
-##### Ejecutar todas las pruebas unitarias del motor NAI (Inercia, Triaje y KV Cache)
 ```console
-ctest --output-on-failure -R nai
+# Autopista + desalojo selectivo + sesiones de 24 h
+llama-server -m modelo.gguf --nai-autopista --context-shift --nai-desalojo --nai-sesiones ./sesiones
+
+# Memoria gravitatoria (experimental)
+llama-server -m modelo.gguf --nai-gravedad 5e-4
+
+# Traza real para calibrar el simulador del planificador (carga mixta concurrente)
+python3 tools/nai/nai_bench.py -m modelo.gguf --carga-mixta 200 --slots 16 --ctx 32768 --flags-servidor="--kv-unified"
+python3 tools/nai/sim/nai_planificador_sim.py --traza nai-bench-logs/traza-tareas.csv --calibrar nai-bench-logs/traza-pasos.csv --capacidad 32768 --slots 16
+
+# Auto-especulación: 1) medir en qué capa se resuelven los tokens, 2) crear el borrador, 3) servir
+./build/bin/nai_medir_capas -m modelo.gguf -n 128
+python3 tools/nai/nai_borrador_capas.py modelo.gguf borrador.gguf --capas 12
+llama-server -m modelo.gguf -md borrador.gguf --spec-draft-n-max 8 --spec-draft-n-min 1
 ```
 
-##### O bien, ejecutar de forma directa el binario de validación de inercia y muestreo
+### Sesiones persistentes
+
+La petición incluye `"nai_session": "<id>"`. Cuando el slot se libera se guarda el KV cache, y se restaura cuando la sesión vuelve, mientras no pasen `--nai-sesion-ttl` segundos sin actividad (86400 = 24 h por defecto).
+
+**Seguridad:**
+- **El id es un secreto:** quien lo conozca puede recuperar la conversación. Usa un valor aleatorio de al menos 128 bits (32 caracteres hexadecimales) generado por tu backend y ligado al usuario autenticado. El servidor avisa si el id tiene menos de 16 caracteres.
+- **Hash con clave:** el id se convierte en nombre de archivo con **SipHash‑2‑4** y una clave aleatoria guardada en `DIR/.nai-clave` (permisos 0600). Así nadie puede fabricar un id que choque con el de otra sesión.
+- **Permisos:** la carpeta queda con permisos 0700 y los archivos con 0600.
+- **Logs:** nunca registran el id, solo una etiqueta derivada del hash.
+- **Sin cifrado:** los archivos no están cifrados. Si contienen datos sensibles, usa un disco o volumen cifrado.
+- **Limitación:** no se restauran sesiones con multimodal ni con decodificación especulativa.
+
+---
+
+## 5. Cómo medir (vanilla vs. NAI)
+
 ```console
-./bin/test-nai-sampling --vocab-model ../models/qwen2/ggml-model.gguf
+python3 tools/nai/nai_bench.py -m modelo.gguf --borrador borrador.gguf --reps 3 --n-predict 128 --salida res.json
 ```
 
-##### Interpretación de los Resultados de TestTest de Inercia Latente (test-nai-inertia): Valida que la entropía espectral $\Delta h$ dispare el umbral de Early Exit exclusivamente cuando la distribución de probabilidad supere el margen estricto $\tau_{\text{autopista}}$.Test de Coherencia de Sesión (test-nai-session): Simula el ciclo de vida de 24 horas y la persistencia del mapa semántico g_nai_mapa_masa bajo concurrencia multihilo.
+Para cada variante levanta `llama-server` en el mismo equipo y reporta:
 
+- tok/s de generación y de prefill;
+- si la salida greedy es **idéntica** a vanilla;
+- una **prueba de aguja**: un dato al inicio del prompt que debe sobrevivir a varios *context shift*.
 
-### A. Rendimiento de Carga y Autopista
-- **Prefill Normal (Seq 0):** `82.01 ms` (`475.54 tok/s`)
-- **Prefill NAI Sharing (Seq 1):** `15.70 ms` *(El KV Cache se copió y solo procesó 1 token gracias al intercambio inteligente)*.
-- **Velocidad de Generación Masiva (200 tokens):** `38.69 tok/s`.
-- **Telemetría de Autopista:** 
-  - Total tokens muestreados: `200`
-  - Conflicto (cadena completa): `120 (60.00%)`
-  - Autopista activa por Margen de Logits (Razón 2): `80 (40.00%)`
-  - *Calibración del sistema:* Saludable y operativa al 40%.
+Al final imprime la tabla en Markdown, lista para pegarla aquí.
 
-### B. Pruebas de Estrés y Límites de Concurrencia
-1. **1 Usuario Simultáneo (Contexto: 512 tokens):**
-   - Throughput Total / Velocidad por usuario: **`72.89 tokens/segundo`**.
-2. **8 Usuarios Simultáneos (Contexto: 4096 tokens):**
-   - Throughput Total: **`201.69 tokens/segundo`** (`25.21 tok/s` por usuario).
-3. **32 Usuarios Simultáneos (Contexto: 16384 tokens):**
-   - **Resultado del Kernel:** Interrupción controlada por aserción de seguridad:
-     `GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`
-   - **Análisis de Ingeniería:** Comprueba que las guardas de memoria protegen los búferes de la GPU Metal ante una saturación masiva de lotes que superan el límite estructural de `n_batch` (512), abortando de forma limpia sin corrupción de memoria unificada.
-
-
----
-<br><br><br><br>
-
-## 10. Ambiente de Ejecución y Diagnóstico de Límites de Hardware
-
-Para comprender con precisión los resultados obtenidos en los benchmarks y el comportamiento del kernel bajo carga masiva, se detalla el entorno físico exacto de pruebas y la justificación técnica detrás de los límites operativos:
-
-### A. Especificaciones del Equipo Anfitrión
-* **Modelo de Estación:** iMac (24 pulgadas, M1, 2021)
-* **Procesador (SoC):** Apple M1 (CPU/GPU integrada de arquitectura unificada)
-* **Memoria Unificada:** 8 GB[cite: 4]
-* **Sistema Operativo:** macOS Tahoe 26.3[cite: 4]
-* **Backend de Aceleración:** Metal (`MTL0`), optimizado para la ejecución directa de tensores en el motor unificado de Apple Silicon.
-
-### B. Configuración del Motor y Diagnóstico de Límites
-* **Parámetros de Lote (`n_batch`):** Configurado a un límite estándar de `512` tokens.
-* **Escenarios Evaluados:** Pruebas de concurrencia y contexto escaladas desde 512 hasta 16,384 tokens.
-
-### C. ¿Por qué se topó la prueba de rendimiento (32 Usuarios / 16k Tokens)?
-Cuando se escaló la concurrencia a 32 usuarios simultáneos con contextos masivos (16,384 tokens), el motor arrojó la siguiente interrupción controlada:
-`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`
-
-* **Explicación de Ingeniería:** Esta interrupción **no es un fallo de software ni un *bug* de memoria**, sino una **guarda de seguridad estructural programada en el kernel**. En un equipo con 8 GB de memoria unificada, procesar un lote masivo de solicitudes concurrentes que supera el límite estático del búfer configurado en `n_batch` (512) activaría el agotamiento de la memoria compartida del sistema operativo, provocando un reinicio del controlador gráfico o del kernel. 
-* **Implicación Física:** La aserción de seguridad garantiza que el motor aborte de forma limpia antes de comprometer la estabilidad del sistema, demostrando que las protecciones del framework responden adecuadamente a los límites físicos del hardware anfitrión.
-
----
-<br><br><br><br>
-
-## 11. Marco Cuántico-Cosmológico y Dinámica de Dispersión en el Motor NAI
-
-Para trascender el cálculo secuencial convencional, NAI modela el flujo de tensores lingüísticos no como un simple paso de matrices estáticas, sino como un **sistema físico multiporta gobernado por dispersión, elasticidad termodinámica y expansión métrica del espacio de contexto**.
+**Resultados:** *pendientes de medir con un modelo real.* Las cifras de versiones anteriores de este README (60 % de ahorro de GPU, 40 % de tokens por la autopista) no se compararon contra vanilla ni contra la calidad, así que se retiraron. Una prueba de humo con el modelo aleatorio de 8 capas confirmó que la autopista y la auto-especulación producen salida idéntica a vanilla (4/4 prompts), y que el desalojo selectivo conserva el inicio del prompt (descartó desde la posición 65 en lugar de la 1). Las velocidades de un modelo de 64 dimensiones no son representativas.
 
 ---
 
-### 11.1. La Matriz de Transformación y el Coeficiente de Restitución ($e$)
-* **De qué trata en la física:** El coeficiente de restitución mide la conservación de la energía cinética en un choque entre cuerpos. Una colisión perfectamente elástica preserva toda la energía ($e = 1$), mientras que una inelástica disipa energía en forma de calor o deformación ($0 \le e < 1$).
-* **Cómo se aplica en NAI:** Conecta el estado latente inicial del token de entrada $h^{(0)}$ con su proyección final post-capas o post-salida temprana $h^{(final)}$. El coeficiente de elasticidad latente regula cuánta "energía informacional" se retiene:
-  $$h^{(final)} = \mathcal{T}_{\text{capas}}(h^{(0)}) \cdot e^{-\lambda \cdot \text{Disipación}}$$
-  Si la certidumbre es alta, el sistema actúa de forma cuasi-elástica mediante el bypass, evitando la fricción de las capas profundas.
+## 6. Advertencias
+
+1. **Gramáticas:** la autopista se desactiva sola con gramática o JSON schema.
+2. **`GGML_ASSERT(n_tokens_all <= cparams.n_batch)`:** este error significa que se envió un batch mayor que `n_batch` a `llama_decode`. Es un error de uso del llamador, no una protección de memoria. Sube `-b`/`-ub` o divide el batch.
+3. **Memoria del borrador:** duplica aproximadamente K/N de los pesos del modelo.
+4. **Calidad del borrador:** sin entrenamiento tipo LayerSkip, la aceptación con K pequeña puede ser baja. Mide antes con `nai_medir_capas`.
+5. **Masa semántica:** es una heurística. Antes de usar `--nai-desalojo` o `--nai-gravedad` en producción, valida la calidad con tu propio caso de uso (prueba de aguja, perplejidad).
+6. **Costo del mapa de masa:** calcular la sorpresa de cada token generado cuesta ~0.09 ms por token con un vocabulario de 32k (log-sum-exp con corte a 16 nats, error < 0.002 en la masa). Escala con el vocabulario: ~0.4 ms con 152k, menos del 2 % en un modelo de 7B. La máscara de gravedad agrega un costo lineal en la longitud del contexto.
 
 ---
 
-### 11.2. Matrices de Dispersión Elástica e Inelástica (S-Matrix)
-* **De qué trata en la física:** En física de partículas y mecánica cuántica, la Matriz S (*Scattering Matrix*) relaciona el estado cuántico inicial de partículas libres antes de una colisión con el estado final después de interactuar mediante un potencial.
-* **Cómo se aplica en NAI:**
-  - **Dispersión Elástica ($\hat{S}_{\text{elástica}}$):** Se aplica en la Autopista de Muestreo. El tensor de logits rebota a través de los criterios de decisión (`DecisionInercia`) sin alterar la pureza semántica de la ruta óptima, conservando el momento informacional exacto.
-  - **Dispersión Inelástica ($\hat{S}_{\text{inelástica}}$):** Se activa en los **Nodos de Conflicto** (altas entropías). El estado colisiona contra las capas profundas (13..N), transformando y absorbiendo energía computacional para generar nuevas trayectorias semánticas complejas (ramificaciones de razonamiento).
+## 7. Trabajo relacionado
+
+- **Salida temprana y auto-especulación:** Schuster et al., *CALM* (2022); Elhoushi et al., *LayerSkip* (2024).
+- **Desalojo de KV por importancia:** Zhang et al., *H2O* (2023); Xiao et al., *StreamingLLM* (2023); Li et al., *SnapKV* (2024).
+- **Sesgo de atención por distancia:** Press et al., *ALiBi* (2021).
+- **Planificación por costo restante:** Schrage, *SRPT* (1968); Kwon et al., *vLLM / PagedAttention* (2023), con expulsión y recomputación o swap de KV.
+- **Decodificación especulativa:** Leviathan et al. (2023); Chen et al. (2023).
+- **Teoría de la información:** Shannon (1948).
 
 ---
 
-### 11.3. Disipación de Energía Cinética en el Nodo Intermedio
-* **De qué trata en la física:** La pérdida de energía mecánica útil en sistemas disipativos debido a fricciones internas o turbulencias.
-* **Cómo se aplica en NAI:** Cuando el Triaje Latente o el Tronco de Capas detecta redundancia sintáctica, la energía cinética del gradiente se disipa deliberadamente en el nodo intermedio (Capa 12). Esto impide el desperdicio de ciclos de GPU en procesar tokens cuya inercia ya determinó el resultado.
+## 8. Mapa del código
+
+| Archivo | Contenido |
+|---|---|
+| `src/inercia_latente.hpp` | Entropía, sorpresa, mapa de masa y predicciones pendientes |
+| `src/llama-context.cpp` | Registro de masas tras cada decode; API `llama_nai_*` |
+| `src/llama-kv-cache.cpp` | Memoria gravitatoria (sesgo en la máscara KQ) |
+| `src/llama-ext.h` | API pública NAI |
+| `common/sampling.cpp` | Autopista de muestreo y telemetría |
+| `common/TriageWrapper.h` | Triaje de prompts (CLI) |
+| `src/nai-session-table.hpp` | Tabla de sesiones y SipHash‑2‑4 |
+| `tools/server/server-context.cpp` | Desalojo selectivo, gravedad, sesiones y traza en el servidor |
+| `tools/nai/nai_borrador_capas.py` | Crea el borrador de K capas |
+| `tools/nai/nai_bench.py` | Banco de pruebas vanilla vs. NAI |
+| `tests/test-nai.cpp` | Pruebas unitarias sin modelo |
+| `tests/nai-manual/nai_medir_capas.cpp` | Lente por capa y regla Δh > τ |
+| `tests/nai-manual/crear_modelo_prueba.py` | Modelo aleatorio diminuto para pruebas |
+| `tools/nai/sim/nai_planificador_sim.py` | Simulador del planificador entrelazado (experimentos, barridos, calibración con trazas) |
+| `docs/PLANIFICADOR.md` | Especificación del planificador: variables, ecuaciones, resultados y plan |
+| `docs/nai-sim/` | Resultados de la simulación (CSV y gráficas) |
 
 ---
 
-### 11.4. La Matriz S en Mecánica Celeste y Dispersión de N-Cuerpos
+## Licencia
 
-#### A. De qué trata en la física y por qué se aplica en NAI
-* **En la física clásica y celeste:** El problema de los $N$-cuerpos (y de forma célebre el **problema de los tres cuerpos**) describe cómo múltiples objetos masivos (como estrellas, planetas o lunas) interactúan gravitacionalmente entre sí en el espacio tridimensional. Debido a la no linealidad de las ecuaciones de movimiento de Newton y Einstein, el sistema carece de una solución analítica general y cerrada; evoluciona a través de órbitas caóticas, resonancias gravitacionales y eyecciones donde los cuerpos de menor masa terminan siendo expulsados del sistema estelar central hacia el espacio profundo.
-* **¿Cómo se aplica en el Motor NAI?** En las arquitecturas tradicionales de LLMs, el búfer de atención (KV Cache) trata todos los tokens pasados bajo una matriz de atención estática ($Q \cdot K^T$), donde la memoria se satura linealmente y el contexto antiguo se degrada de manera artificial o uniforme. NAI transforma el KV Cache en un **sistema dinámico de N-cuerpos estelar**, donde cada token $i$ actúa como un "cuerpo masivo" provisto de una masa semántica intrínseca $I_i$. 
-
-En lugar de almacenar ciegamente todo el historial, los tensores de clave y valor ($K, V$) interactúan mediante un campo gravitatorio de tres cuerpos de referencia (el token actual de consulta, el ancla semántica del prompt del sistema y el contexto histórico circundante). Los tokens con alta masa semántica forman pozos gravitatorios profundos que atraen y retienen la atención de los tokens cercanos, mientras que los tokens de relleno sintáctico experimentan inestabilidad orbital y son expulsados dinámicamente del búfer activo, simulando una eyección gravitacional.
-
----
-
-### B. Formulación Matemática de la Matriz S y Dinámica de N-Cuerpos en el KV Cache
-
-Para formalizar la transición de estados y la interacción gravitacional en el espacio de atención de NAI, expresamos la evolución del estado orbital de los tokens mediante el operador de la **Matriz S de Dispersión Gravitacional ($\hat{S}_{\text{grav}}$)**:
-
-$$\left| \psi_{\text{salida}} \right\rangle = \hat{S}_{\text{grav}} \left( \sum_{j=1}^{N} \frac{G \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^2} \right) \left| \psi_{\text{entrada}} \right\rangle$$
-
-Donde la fuerza de interacción gravitacional efectiva $$ \mathbf{F}_{ij} $$ que experimenta el token $i$ respecto al token circundante $j$ en el espacio latente está dada por:
-
-$$\mathbf{F}_{ij} = - \frac{G_{\text{efectivo}} \cdot I_i \cdot I_j}{\|\mathbf{r}_i - \mathbf{r}_j\|^3} (\mathbf{r}_i - \mathbf{r}_j) - \eta \cdot \mathbf{v}_i$$
-
-- **Variables y Parámetros del Sistema:**
-  - **$G_{\text{efectivo}}$:** Constante de acoplamiento gravitacional del motor, que calibra la intensidad de la atracción semántica en el KV Cache.
-  - **$I_i, I_j$:** Masas semánticas intrínsecas de los tokens $i$ y $j$, calculadas a partir de su norma vectorial y su entropía local ($I_i = \|W_K x_i\|_2 \cdot [1 + \mathcal{H}_{\text{local}}(x_i)]$criptor).
-  - **$\mathbf{r}_i, \mathbf{r}_j$:** Coordenadas vectoriales de los tokens dentro del espacio latente de atención.
-  - **$-\eta \cdot \mathbf{v}_i$:** Término de fricción dinámica o disipación orbital, responsable de amortiguar las oscilaciones erráticas y estabilizar las trayectorias de atención de largo plazo.
-
-- **Comportamiento Arquitectónico:** 
-  Mediante este formalismo de N-cuerpos, la Matriz S calcula la dispersión del campo de atención: los tokens que colisionan con trayectorias de baja masa semántica y alta velocidad relativa escapan del radio de Hill del sistema de atención, liberando memoria de la GPU de manera orgánica sin necesidad de truncamientos abruptos por ventanas deslizantes rígidas.
----
-
-### 11.5. El Marco Dinámico: Inserción de la Fuerza de Hubble y Expansión Cosmológica
-
-#### A. De qué trata en la física y por qué se aplica en NAI
-* **En la física y cosmología moderna:** La **Ley de Hubble-Lemaître** describe la observación astronómica de que las galaxias distantes se alejan unas de otras a una velocidad proporcional a su distancia (expresada mediante la constante de Hubble $H_0$). Esta expansión métrica del espacio no ocurre porque los objetos se muevan mecánicamente a través del cosmos, sino porque el propio tejido del espacio-tiempo se estira, provocando una dilución progresiva de la densidad de energía, un corrimiento hacia el rojo (*redshift*) de la radiación y un enfriamiento generalizado del universo.
-* **¿Cómo se aplica en el Motor NAI?** En las arquitecturas tradicionales de LLMs, cuando una conversación o un documento excede ventanas masivas de contexto (por ejemplo, >32,000 tokens), el modelo sufre de saturación y degradación de la atención, tratando los tokens remotos con la misma métrica espacial que los tokens inmediatos. NAI resuelve esto introduciendo una **expansión métrica del espacio de contexto**. 
-
-A medida que un token se desplaza hacia el pasado histórico (a mayor distancia posicional y temporal respecto al foco atencional actual del cabezal de inferencia), el motor aplica un campo de expansión análogo a la constante de Hubble local ($H_{\text{local}}$). Esto provoca que la distancia métrica efectiva entre los tokens antiguos aumente de forma exponencial y que su influencia gravitatoria se diluya progresivamente, simulando un "corrimiento al rojo informacional" que enfría el ruido histórico y preserva los recursos de la GPU para el núcleo activo de razonamiento.
-
----
-
-#### B. Formulación Matemática de la Expansión Cosmológica del Contexto
-
-Para modelar matemáticamente esta expansión métrica en el espacio de tensores de atención, definimos el **Factor de Escala del Contexto ($a(t)$)**, el cual rige la evolución de la distancia métrica efectiva $\chi_{ij}$ entre el token de atención actual y los tokens históricos:
-
-$$d\chi_{ij}(t) = a(t) \cdot dx_0$$
-
-Donde la tasa de expansión temporal del espacio de contexto obedece a la ecuación diferencial de Friedmann adaptada al motor:
-
-$$\left( \frac{\dot{a}(t)}{a(t)} \right)^2 = H_{\text{local}}^2 = \frac{8\pi G}{3} \rho_{\text{contexto}}(t) - \frac{k}{a(t)^2} + \Lambda_{\text{local}}$$
-
-* **Evolución del Tensor de Clave bajo Expansión Cosmológica:**
-  La atenuación de la representación vectorial del token $K_i$ debido al estiramiento del espacio de contexto a lo largo del tiempo emergente está dada por:
-
-$$K_i(t) = K_i(0) \cdot \exp\left( - \int_{0}^{t} H_{\text{local}} \cdot z_{\text{redshift}}(\tau) \, d\tau \right)$$
-
-* **Parámetros y Componentes del Sistema:**
-  * **$H_{\text{local}}$:** Constante de Hubble local del motor, que regula la velocidad a la que el espacio de contexto se expande para los tokens distantes.
-  * **$\rho_{\text{contexto}}(t)$:** Densidad informacional global del búfer de tokens en el instante $t$.
-  * **$\Lambda_{\text{local}}$:** Constante cosmológica artificial del sistema, que actúa como una presión de vacío repulsiva para evitar el colapso total de la memoria ante contextos masivos.
-  * **$z_{\text{redshift}}$:** Factor de degradación espectral, que mide qué tan "lejos" (en términos de turnos conversacionales o distancia de tokens) se encuentra el dato histórico respecto al presente computacional del modelo.
-
-* **Comportamiento Arquitectónico:**
-  Gracias a esta formulación cosmológica, los tokens distantes no se eliminan de golpe de forma arbitraria, sino que experimentan una separación métrica controlada y un enfriamiento por expansión, imitando la termodinámica de un universo en expansión que purga naturalmente el desorden y la entropía de los datos obsoletos.
-
----
-
-### 11.6. Posición y Tiempo Emergentes (Espacio-Tiempo No Cartesiano)
-
-#### A. ¿De qué trata este concepto en la física y por qué se aplica en NAI?
-En la física clásica y en las arquitecturas de transformadores tradicionales (como el *Vanilla Transformer* y `llama.cpp`), el tiempo y el espacio de contexto operan sobre una **cuadrícula cartesiana rígida y lineal**:
-* El tiempo es simplemente un contador secuencial de tokens discretos ($t = 1, 2, 3 \dots N$).
-* La posición espacial de los tokens en el vector de atención se calcula mediante coordenadas rígidas (como las codificaciones posicionales absolutas o relativas tipo RoPE) donde cada paso de distancia consume idéntico "espacio métrico".
-
-Sin embargo, en la **Relatividad General**, el espacio-tiempo no es un fondo estático, sino una geometría flexible y dinámica (**métrica de Riemann**) que se curva y deforma en presencia de masa y energía. 
-
-**¿Cómo se aplica esto en el Motor NAI?** 
-En NAI, la conversación o el documento no es una línea recta de tokens. El motor de contexto opera sobre un **espacio-tiempo no cartesiano emergente**, donde:
-1. **Dilatación Temporal del Relleno:** En las zonas de baja masa semántica (texto de relleno, saludos, transiciones sintácticas o explicaciones redundantes), el "tiempo computacional" se dilata; los tokens se desplazan rápidamente hacia el olvido métrico mediante el enfriamiento exponencial ($dt$).
-2. **Contracción Espacial en Pozos Gravitatorios:** En las zonas de alta densidad semántica (instrucciones críticas, variables de código, restricciones lógicas), el espacio métrico se contrae. Los tokens masivos se atraen gravitacionalmente, acortando su distancia efectiva de atención independientemente de cuántos tokens de distancia física los separen en la secuencia bruta.
-
----
-
-#### B. Formulación Matemática del Espacio-Tiempo No Cartesiano en NAI
-
-Para modelar esta métrica emergente, definimos el intervalo de espacio-tiempo de contexto $ds^2$ mediante un tensor métrico modificado $g_{\mu\nu}$:
-
-$$ds^2 = g_{\mu\nu}(x) dx^\mu dx^\nu = -\left(1 - \frac{2GM_{\text{local}}}{r c^2}\right) c^2 dt_{\text{emergente}}^2 + \left(1 - \frac{2GM_{\text{local}}}{r c^2}\right)^{-1} dr^2 + r^2 d\Omega^2$$
-
-Donde la evolución del tiempo emergente del sistema $dt_{\text{emergente}}$ en relación con el tiempo de procesamiento secuencial crudo $dt_{\text{gpu}}$ está governada por la densidad de inercia local $\Delta h$ y la masa semántica $I_i$:
-
-$$\frac{dt_{\text{emergente}}}{dt_{\text{gpu}}} = \sqrt{1 - \frac{\gamma \cdot \Delta h(t)}{I_i + \varepsilon}}$$
-
-* **Interpretación de la Ecuación:**
-  - Cuando la inercia latente $\Delta h$ es baja (tokens altamente predecibles), el radical tiende a 1, acelerando el flujo temporal y permitiendo el salto (*Early Exit* o *Bypass*).
-  - Cuando el token se encuentra en un **Nodo de Conflicto** (alta entropía, $I_i$ elevado), el factor métrico de curvatura frena el tiempo computacional efectivo, obligando a la red a dedicar mayor densidad de procesamiento (capas profundas) a resolver la ambigüedad conceptual.
-
----
-
-### 11.7. La Ecuación Maestra del Universo Modificada (NAI Unified Master Equation)
-* **De qué trata conceptualmente:** La síntesis absoluta de las leyes de campo, inercia, gravedad y disipación aplicadas a la cognición artificial.
-* **Formulación del Sistema Completo Unificado:**
-
-$$\mathcal{R}_{\mu\nu} - \frac{1}{2}g_{\mu\nu}\mathcal{R} + \Lambda_{\text{local}} g_{\mu\nu} = \frac{8\pi G}{c^4} \left( \hat{T}_{\text{semántica}}^{(i)} - \gamma \frac{\partial \Delta h}{\partial t} + \hat{S}_{\text{disipación}} \right)$$
-
-* **Interpretación Arquitectónica en NAI:**
-  1. El término métrico y la constante cosmológica local ($\Lambda_{\text{local}}$) regulan la expansión del KV Cache.
-  2. El tensor de energía-momento semántico ($\hat{T}_{\text{semántica}}$) representa la masa de los tokens interactuando mediante el modelo de tres cuerpos.
-  3. El término de inercia ($\frac{\partial \Delta h}{\partial t}$) controla la velocidad del *Early Exit* en el tronco respirante del motor.
-
-<br><br><br><br>
-
-## 12. Consideraciones Técnicas y Advertencias de Uso
-
-Las capacidades operativas del Motor NAI —en especial los umbrales de contexto masivo, el tamaño de lote (`n_batch`) y el rendimiento concurrente— no son estáticas; **dependen directamente de la infraestructura de hardware y del ancho de banda de memoria del equipo anfitrión** donde se ejecute la compilación:
-
-1. **Interacción con Gramáticas Estrictas:**
-   - Si se activa el muestreo por gramática (`grammar_first = false`), la regla de autopista podría omitir la validación sintáctica en tokens dominantes. Para esquemas rígidos (JSON, YAML), se recomienda forzar estrictamente `grammar_first = true` o deshabilitar temporalmente el bypass de autopista.
-
-2. **Normalización de Probabilidades:**
-   - Las reglas de inercia basadas en el margen de probabilidad ($|p_1 - p_2|$, correspondientes a los Códigos 3 y 4) requieren que el vector de candidatos cuente con un paso previo de Softmax y normalización explícita. Si el pipeline entrega únicamente logits puros sin normalizar, el motor recurrirá de forma transparente al Código 2 (margen de logits).
-
-3. **Seguridad Multi-hilo (`Multi-threading`):**
-   - La estructura global `nai::MapaMasaSemantica g_nai_mapa_masa` implementada en `llama-context.cpp` debe protegerse mediante cerrojos de exclusión mutua (*mutex/locks*) o ser instanciada por contexto de forma aislada en caso de ejecutar inferencia concurrente en múltiples instancias paralelas de `llama_context`.
-
-4. **Restricción de Memoria Unificada vs. VRAM Dedicada:**
-   - En equipos basados en arquitectura **Apple Silicon (M1/M2/M3/M4)** con memoria unificada, los límites de contexto masivo (>16k - 32k tokens) están condicionados por la asignación dinámica de memoria compartida del sistema operativo. Superar el límite estructural del búfer de lotes provocará la interrupción controlada del kernel por aserción (`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`), protegiendo el sistema de la saturación total.
-   - En estaciones de trabajo con **GPU dedicada (NVIDIA / AMD)** y VRAM discreta, el límite de concurrencia de usuarios simultáneos dependerá estrictamente del tamaño de la memoria gráfica disponible para alojar los tensores del KV Cache gravitatorio bajo la ecuación de expansión de Hubble.
-
-5. **Ajuste Dinámico de Lotes (`n_batch`):**
-   - Se recomienda calibrar el parámetro `n_batch` en función de los núcleos de procesamiento y el paralelismo de hilos del procesador host para evitar cuellos de botella durante el cálculo de la inercia latente y la matriz de dispersión.
-
----
-
-<br><br><br><br>
-
-## 13 Ámbitos de Aplicación y Evolución Transversal del Ecosistema
-
-La arquitectura de física computacional, inercia, campos gravitatorios y menor acción energética —ideada, conceptualizada y desarrollada íntegramente por **Ángelus Tenshi (Francisco Alejandro Cruz Castro)**— tiene su raíz fundamental en **Aperion Engine** y su evolución hacia la inteligencia artificial con el **Motor NAI**, estableciendo un nuevo paradigma que abarca múltiples ramas tecnológicas:
-
-* **1. Infraestructura de Microservicios y Sistemas Distribuidos (Aperion Engine — Raíz Fundacional)**
-  * *Descripción y Origen:* Creado por ti como un motor de microservicios y sistemas distribuidos de alto desempeño, **Aperion Engine - (Creado por Ángelus Tenshi (Francisco Alejandro Cruz Castro)** implementa los principios de menor acción, enrutamiento elástico y dispersión de estados para manejar flujos masivos de datos y concurrencia extrema con eficiencia directa de silicio.
-  * *Aplicación Práctica:* Pasarelas de red (*API Gateways*), servidores de alta concurrencia y arquitecturas distribuidas orientadas al rendimiento transaccional puro y la mínima latencia.
-
-* **2. Optimización de Modelos de Lenguaje y Tensores en Silicio (Motor NAI)**
-  * *Descripción y Origen:* Tomando como base la robustez y la física de campos probada originariamente en Aperion Engine, la arquitectura fue destilada, evolucionada y proyectada hacia el dominio de los Modelos de Lenguaje Grande (`llama.cpp`) con el **Motor NAI**.
-  * *Aplicación Práctica:* Mitigación de la saturación entrópica en contextos masivos (por encima de 32k tokens), ahorro de hasta el 60% de ciclos de GPU mediante el *Early Exit* (Capas Respirantes) y persistencia conversacional de 24 horas por usuario.
-
-* **3. Plataformas Transaccionales Multi-Tenant de Ultra-Bajo Nivel (Europiel Engine)**
-  * *Descripción y Origen:* La consolidación enterprise en .NET 10 y C nativo que hereda la velocidad de los principios del ecosistema, integrando gestión de memoria no administrada (`NativeMemory`, Zero-GC), búferes circulares atómicos en C (`quantum_core.c`) y enrutamiento dinámico multicanal (`MultiBoxEngine`).
-  * *Aplicación Práctica:* Backends corporativos que operan a ~12.4 nanosegundos por operación con cero asignaciones en el Heap, conectando dinámicamente procedimientos almacenados e ingesta JSON mediante `OPENJSON` y una consola de control embebida (`AdminEndpoints`).
-
-* **4. Diseño de Hardware Neuromórfico y Aceleradores de Silicio**
-  * *Descripción y Origen:* Extensión física de los principios de inercia y disipación entrópica formulados en Aperion Engine directamente al diseño físico de semiconductores.
-  * *Aplicación Práctica:* Unidades de procesamiento en el borde (*Edge AI*) que modulan dinámicamente su frecuencia de reloj y consumo energético en función de la incertidumbre o inercia de los datos de entrada, reduciendo drásticamente el estrés térmico del circuito.
-
-* **5. Robótica Autónoma y Sistemas de Navegación en Tiempo Real**
-  * *Descripción y Origen:* Modelado del entorno físico de un robot o vehículo autónomo utilizando la *Matriz de Dispersión Gravitacional ($\hat{S}_{\text{grav}}$)* y pozos de potencial dinámicos heredados de la arquitectura de campos.
-  * *Aplicación Práctica:* Planificación de trayectorias en tiempo real donde los obstáculos críticos forman pozos de atracción inmediata y el ruido ambiental irrelevante experimenta un desvanecimiento temporal orgánico con cero sobrecarga de cómputo.
-
-
-
-<br><br><br><br>
-
-
-
-## 14. Referencias Bibliográficas y Fundamentos Teóricos
-
-Las bases arquitectónicas, matemáticas y físicas del **Motor NAI** se sustentan en los siguientes trabajos seminales de investigación científica, teoría de la información y mecánica estadística, complementados con la autoría, conceptualización y desarrollo original de los caminos físicos del framework:
-
-1. **Arquitectura Transformer Fundacional:**
-   * Vaswani, A., et al. (2017). *Attention Is All You Need*. Advances in Neural Information Processing Systems (NeurIPS 2017). (Referencia base para el mecanismo de autoatención estándar y su análisis de limitaciones estructurales).
-
-2. **Teoría de la Información y Entropía Espectral:**
-   * Shannon, C. E. (1948). *A Mathematical Theory of Communication*. Bell System Technical Journal, 27(3), 379–423. (Fundamento matemático aplicado en el cálculo de la entropía local y las capas respirantes del motor).
-
-3. **Mecánica Celeste y Sistemas de N-Cuerpos:**
-   * Poincare, H. (1890). *Sur le problème des trois corps et les équations de la dynamique*. Acta Mathematica, 13, 1–270. (Base teórica adaptada para el modelado dinámico y la dispersión gravitacional en el KV Cache).
-
-4. **Cosmología y Expansión Métrica:**
-   * Hubble, E. (1929). *A Relation between Distance and Radial Velocity among Extra-Galactic Nebulae*. Proceedings of the National Academy of Sciences, 15(3), 168–173. (Principio físico análogo aplicado a la expansión métrica del espacio de contexto masivo).
-
-5. **Autoría, Conceptualización Teórica y Desarrollo Original del Framework:**
-   * **Ángelus Tenshi (Francisco Alejandro Cruz Castro).** *NAI Engine: High-Performance LLM Framework via Physics-Based Principles and Llama.cpp Optimization* (2026).
-     * **Aportación Conceptual y Derivación Teórica Original:** La formulación, diseño y reinterpretación de los caminos físicos aplicados a la cognición artificial bajo este framework —incluyendo el modelado del *Problema de los Tres Cuerpos* y la Matriz S de Dispersión Gravitacional (Ŝ_grav) en el KV Cache, la deducción de la Masa Semántica Intrínseca (I_i), la inserción de la *Fuerza de Hubble y Expansión Cosmológica del Contexto*, el establecimiento del *Espacio-Tiempo No Cartesiano con Posición y Tiempo Emergentes*, y la síntesis de la *Ecuación Maestra del Universo unificada (NAI Unified Master Equation)*— representan un desarrollo de investigación independiente y original. Partiendo de escritos y principios de la física teórica y la termodinámica, se abrieron caminos alternativos y formulaciones matemáticas inéditas para resolver de raíz los cuellos de botella estructurales de los Transformers tradicionales, traduciendo la mecánica celeste y de campos a código ejecutable de ultra-alto rendimiento sobre llama.cpp.
-<br><br><br><br>
-
-
-
-## 12. Licencia
-
-Este proyecto mantiene los términos de licenciamiento originales de `llama.cpp` bajo la **MIT License**. Consulta el archivo `LICENSE` incluido en el repositorio para más detalles sobre derechos de copia, redistribución y limitaciones de responsabilidad.
-
-
+MIT, igual que llama.cpp. Ver `LICENSE`.

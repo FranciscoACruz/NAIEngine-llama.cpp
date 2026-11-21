@@ -17,6 +17,8 @@ struct llama_context;
 // llama_kv_cache
 //
 
+namespace nai { class MapaMasaSemantica; } // [NAI] src/inercia_latente.hpp
+
 class llama_kv_cache : public llama_memory_i {
 public:
     struct stream_copy_info {
@@ -219,7 +221,21 @@ public:
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
 
+    // [NAI] memoria gravitatoria: sesgo de atención -γ·Δt / (I_i + ε) para tokens de masa I_i < 1.
+    // mapa == nullptr o gamma <= 0 la desactiva. El mapa pertenece al llama_context.
+    void nai_set_gravedad(const nai::MapaMasaSemantica * mapa, float gamma, float eps) {
+        nai_mapa  = mapa;
+        nai_gamma = gamma;
+        nai_eps   = eps;
+    }
+
 private:
+    const nai::MapaMasaSemantica * nai_mapa  = nullptr;
+    float                          nai_gamma = 0.0f;
+    float                          nai_eps   = 0.05f;
+
+    void nai_aplicar_gravedad(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
     const llama_model & model;
     const llama_hparams & hparams;
 

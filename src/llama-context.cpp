@@ -1,4 +1,6 @@
 #include "llama-context.h"
+#include "llama-kv-cache-iswa.h" // [NAI]
+#include "llama-kv-cache.h" // [NAI]
 #include "inercia_latente.hpp"
 #include "ggml.h"
 #include "llama-arch.h"
@@ -1227,6 +1229,9 @@ void llama_context::nai_set_masa_activa(bool activa) {
     if (activa == nai_masa.activo()) {
         return;
     }
+    if (!activa) {
+        nai_set_gravedad(0.0f, 0.0f); // la gravedad depende del mapa
+    }
     if (activa) {
         nai_masa.init(cparams.n_seq_max, cparams.n_ctx_seq);
         LLAMA_LOG_INFO("%s: [NAI] mapa de masa activo (%u secuencias x %u posiciones)\n",
@@ -1263,6 +1268,31 @@ void llama_context::nai_limpiar_masa(llama_seq_id seq_id) {
     nai_masa.limpiar(seq_id);
 }
 
+bool llama_context::nai_set_gravedad(float gamma, float eps) {
+    std::vector<llama_kv_cache *> caches;
+    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory.get())) {
+        caches.push_back(kv);
+    } else if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory.get())) {
+        caches.push_back(iswa->get_base());
+        caches.push_back(iswa->get_swa());
+    }
+    if (caches.empty()) {
+        LLAMA_LOG_WARN("%s: [NAI] memoria gravitatoria no soportada con este tipo de memoria (recurrente/híbrida)\n", __func__);
+        return false;
+    }
+    const bool activa = gamma > 0.0f;
+    if (activa && !nai_masa.activo()) {
+        nai_set_masa_activa(true);
+    }
+    for (auto * kv : caches) {
+        kv->nai_set_gravedad(activa ? &nai_masa : nullptr, gamma, eps);
+    }
+    if (activa) {
+        LLAMA_LOG_INFO("%s: [NAI] memoria gravitatoria activa: sesgo = -%.2e * dt / (masa + %.3f)\n", __func__, gamma, eps);
+    }
+    return true;
+}
+
 void llama_context::nai_notificar_desalojo(llama_seq_id seq_id, llama_pos p0, int32_t n_discard, llama_pos p_end) {
     nai_masa.quitar_y_recorrer(seq_id, p0, n_discard, p_end);
 }
@@ -1277,20 +1307,61 @@ void llama_context::nai_registrar_masas(const llama_batch & batch, const std::ve
         }
     }
 
-    // 2) las posiciones con logits reciben su entropía normalizada
-    if (!logits.data || out_ids.empty()) {
+    //    y, si el decode anterior dejó una predicción pendiente para esta posición,
+    //    se resuelve con el token que realmente llegó (caso normal en generación).
+    //    La predicción solo es válida para el PRIMER token de la secuencia en este
+    //    batch; si no coincide (p. ej. el servidor hizo seq_rm y re-decodifica),
+    //    se descarta para no usar logits de otro prefijo.
+    {
+        std::vector<char> visto(cparams.n_seq_max, 0);
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            const int32_t n_seq = batch.n_seq_id ? batch.n_seq_id[i] : 1;
+            for (int32_t s = 0; s < n_seq; ++s) {
+                const llama_seq_id sid = batch.seq_id ? batch.seq_id[i][s] : 0;
+                if (sid < 0 || (uint32_t) sid >= visto.size() || visto[sid]) {
+                    continue;
+                }
+                visto[sid] = 1;
+                if (batch.token) {
+                    nai_masa.resolver_pendiente(sid, batch.pos[i], batch.token[i]);
+                }
+                nai_masa.descartar_pendiente(sid);
+            }
+        }
+    }
+
+    // 2) cada fila de logits predice el token de pos + 1:
+    //    - si ese token viene en este mismo batch (prompt con logits, verificación
+    //      especulativa), su masa se calcula de inmediato;
+    //    - si no (el token aún no se muestrea), la fila queda pendiente.
+    if (!logits.data || out_ids.empty() || !batch.token) {
         return;
     }
     synchronize();
 
     const size_t n_vocab_ = (size_t) model.vocab.n_tokens();
     for (size_t row = 0; row < out_ids.size(); ++row) {
-        const int32_t i = out_ids[row];
-        const float masa = nai::entropia_normalizada(logits.data + row*n_vocab_, n_vocab_);
+        const int32_t i     = out_ids[row];
+        const float * fila  = logits.data + row*n_vocab_;
         const int32_t n_seq = batch.n_seq_id ? batch.n_seq_id[i] : 1;
         for (int32_t s = 0; s < n_seq; ++s) {
-            const llama_seq_id sid = batch.seq_id ? batch.seq_id[i][s] : 0;
-            nai_masa.registrar(sid, batch.pos[i], masa);
+            const llama_seq_id sid  = batch.seq_id ? batch.seq_id[i][s] : 0;
+            const llama_pos    psig = batch.pos[i] + 1;
+
+            // el siguiente token de la secuencia suele ser el siguiente del batch
+            int32_t j = -1;
+            if (i + 1 < batch.n_tokens && batch.pos[i + 1] == psig) {
+                const int32_t n_seq_j = batch.n_seq_id ? batch.n_seq_id[i + 1] : 1;
+                for (int32_t t = 0; t < n_seq_j; ++t) {
+                    if ((batch.seq_id ? batch.seq_id[i + 1][t] : 0) == sid) { j = i + 1; break; }
+                }
+            }
+
+            if (j >= 0) {
+                nai_masa.registrar(sid, psig, nai::sorpresa_normalizada(fila, n_vocab_, batch.token[j]));
+            } else {
+                nai_masa.guardar_pendiente(sid, psig, fila, n_vocab_);
+            }
         }
     }
 }
@@ -4413,4 +4484,7 @@ void      llama_nai_notificar_desalojo(llama_context * ctx, llama_seq_id seq_id,
 }
 void      llama_nai_limpiar_masa(llama_context * ctx, llama_seq_id seq_id) {
     ctx->nai_limpiar_masa(seq_id);
+}
+bool      llama_nai_set_gravedad(llama_context * ctx, float gamma, float eps) {
+    return ctx->nai_set_gravedad(gamma, eps);
 }

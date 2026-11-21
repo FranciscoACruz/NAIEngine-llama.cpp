@@ -43,6 +43,84 @@ static void test_entropia() {
     std::printf("[test-nai] entropia OK\n");
 }
 
+static void test_sorpresa() {
+    // distribución uniforme: cualquier token tiene sorpresa ln(n) -> 1.0
+    std::vector<float> uniforme(1000, 0.5f);
+    NAI_CHECK(cerca(nai::sorpresa_normalizada(uniforme.data(), uniforme.size(), 7), 1.0f));
+
+    // pico en el token 3: el token 3 es casi seguro (masa ~0), cualquier otro es muy sorprendente (1.0)
+    std::vector<float> pico(1000, 0.0f);
+    pico[3] = 100.0f;
+    NAI_CHECK(nai::sorpresa_normalizada(pico.data(), pico.size(), 3) < 1e-3f);
+    NAI_CHECK(cerca(nai::sorpresa_normalizada(pico.data(), pico.size(), 4), 1.0f));
+
+    // valor intermedio exacto: p = 0.5 entre dos tokens de un vocabulario de 4 -> ln2/ln4 = 0.5
+    std::vector<float> dos = {10.0f, 10.0f, -1e9f, -1e9f};
+    NAI_CHECK(cerca(nai::sorpresa_normalizada(dos.data(), dos.size(), 0), 0.5f));
+
+    // datos inválidos
+    NAI_CHECK(nai::sorpresa_normalizada(nullptr, 10, 0) == nai::MASA_PROTEGIDA);
+    NAI_CHECK(nai::sorpresa_normalizada(uniforme.data(), uniforme.size(), -1) == nai::MASA_PROTEGIDA);
+    NAI_CHECK(nai::sorpresa_normalizada(uniforme.data(), uniforme.size(), 1000) == nai::MASA_PROTEGIDA);
+    std::vector<float> nan4(4, NAN);
+    NAI_CHECK(nai::sorpresa_normalizada(nan4.data(), nan4.size(), 0) == nai::MASA_PROTEGIDA);
+    // corte del lse: error despreciable frente al cálculo exacto en doble precisión
+    {
+        std::vector<float> l(152000);
+        uint32_t semilla = 12345;
+        for (auto & v : l) { semilla = semilla * 1664525u + 1013904223u; v = (float) ((semilla >> 8) % 20000) / 1000.0f - 10.0f; }
+        l[42] = 25.0f; // un token dominante
+        const double exacto = nai::log_sum_exp(l.data(), l.size());
+        const float  rapido = nai::log_sum_exp_rapido(l.data(), l.size());
+        NAI_CHECK(std::fabs(exacto - rapido) < 0.02);
+        for (int32_t t : {0, 42, 1000, 151999}) {
+            const float m_exacta = (float) std::min(1.0, std::max(0.0, (exacto - l[t]) / std::log(152000.0)));
+            NAI_CHECK(std::fabs(nai::sorpresa_normalizada(l.data(), l.size(), t) - m_exacta) < 0.002f);
+        }
+    }
+    std::printf("[test-nai] sorpresa OK\n");
+}
+
+static void test_pendientes() {
+    nai::MapaMasaSemantica m;
+    m.init(2, 64);
+    std::vector<float> pico(16, 0.0f);
+    pico[5] = 100.0f;
+
+    // la fila calculada en pos 9 predice pos 10: la masa va a pos 10, no a 9
+    m.guardar_pendiente(0, 10, pico.data(), pico.size());
+    NAI_CHECK(m.pos_pendiente(0) == 10);
+    NAI_CHECK(!m.resolver_pendiente(0, 11, 5)); // otra posición: no resuelve
+    NAI_CHECK(!m.resolver_pendiente(1, 10, 5)); // otra secuencia: no resuelve
+    NAI_CHECK(m.resolver_pendiente(0, 10, 5));  // llegó el token predicho
+    NAI_CHECK(m.obtener(0, 10) < 1e-3f);
+    NAI_CHECK(m.obtener(0, 9) == nai::MASA_PROTEGIDA);
+    NAI_CHECK(m.pos_pendiente(0) == -1);        // se consume una sola vez
+
+    // un token inesperado conserva masa alta
+    m.guardar_pendiente(0, 11, pico.data(), pico.size());
+    NAI_CHECK(m.resolver_pendiente(0, 11, 2));
+    NAI_CHECK(cerca(m.obtener(0, 11), 1.0f));
+
+    // el desalojo recorre la predicción pendiente igual que el KV
+    m.guardar_pendiente(0, 30, pico.data(), pico.size());
+    m.quitar_y_recorrer(0, 20, 4, 31);
+    NAI_CHECK(m.pos_pendiente(0) == 26);
+    m.guardar_pendiente(0, 22, pico.data(), pico.size());
+    m.quitar_y_recorrer(0, 20, 4, 31);          // la posición pendiente fue desalojada
+    NAI_CHECK(m.pos_pendiente(0) == -1);
+
+    // limpiar descarta pendientes
+    m.guardar_pendiente(1, 5, pico.data(), pico.size());
+    m.limpiar(1);
+    NAI_CHECK(m.pos_pendiente(1) == -1);
+
+    // posición fuera de rango: no se guarda
+    m.guardar_pendiente(0, 999, pico.data(), pico.size());
+    NAI_CHECK(m.pos_pendiente(0) == -1);
+    std::printf("[test-nai] predicciones pendientes OK\n");
+}
+
 static void test_mapa_masa() {
     nai::MapaMasaSemantica m;
     NAI_CHECK(!m.activo());
@@ -119,6 +197,10 @@ static void test_triaje() {
     NAI_CHECK(t.procesar_prompt("ayudame con la FUNCIÓN").modo == ModoTriaje::DIRECTO_AUTOPISTA); // acento normalizado
     NAI_CHECK(t.procesar_prompt("explica la fotosintesis").modo == ModoTriaje::DIRECTO_AUTOPISTA);
     NAI_CHECK(t.procesar_prompt("crea algo bonito para la fiesta de mi hermana").modo == ModoTriaje::PROPUESTA_HIPOTESIS);
+    // el modo hipótesis ya no inyecta supuestos (antes forzaba "C++") en el mensaje
+    NAI_CHECK(t.procesar_prompt("crea algo bonito para la fiesta de mi hermana").contexto_inyectado.empty());
+    NAI_CHECK(t.procesar_prompt("help me with docker").modo == ModoTriaje::DIRECTO_AUTOPISTA);   // ancla en inglés
+    NAI_CHECK(t.procesar_prompt("hazme un script en rust").modo == ModoTriaje::DIRECTO_AUTOPISTA);
     std::printf("[test-nai] triaje OK\n");
 }
 
@@ -127,6 +209,19 @@ static void test_sesiones() {
     NAI_CHECK(nai::hash_sesion("usuario-1") == nai::hash_sesion("usuario-1"));
     NAI_CHECK(nai::hash_sesion("usuario-1") != nai::hash_sesion("usuario-2"));
     NAI_CHECK(nai::hash_sesion("") != NAI_EMPTY_HANDLE);
+
+    // SipHash-2-4: vector de prueba oficial (clave 00..0f, mensaje vacío) = 0x726fdb47dd0e0e31
+    {
+        nai::ClaveSesion k{0x0706050403020100ULL, 0x0f0e0d0c0b0a0908ULL};
+        NAI_CHECK(nai::siphash24("", 0, k) == 0x726fdb47dd0e0e31ULL);
+        // mensaje 00..0e (15 bytes) = 0xa129ca6149be45e5
+        unsigned char msg[15];
+        for (int i = 0; i < 15; ++i) msg[i] = (unsigned char) i;
+        NAI_CHECK(nai::siphash24(msg, sizeof(msg), k) == 0xa129ca6149be45e5ULL);
+        // con otra clave el mismo id produce otro handle
+        nai::ClaveSesion k2{1, 2};
+        NAI_CHECK(nai::hash_sesion("usuario-1", k) != nai::hash_sesion("usuario-1", k2));
+    }
 
     nai::NaiSessionTable t(16);
     auto nueva = [](const std::string & id, int64_t t_act) {
@@ -176,6 +271,8 @@ static void test_sesiones() {
 
 int main() {
     test_entropia();
+    test_sorpresa();
+    test_pendientes();
     test_mapa_masa();
     test_telemetria();
     test_triaje();

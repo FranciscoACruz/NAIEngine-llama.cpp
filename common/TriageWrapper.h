@@ -20,13 +20,25 @@ struct ResultadoTriaje {
 
 class TriageEngine {
 private:
+    // Palabras que indican lenguaje, entorno o restricción concreta (sin acentos, minúsculas).
     std::vector<std::string> anclajes_tecnicos = {
-        "c++", "python", "json", "sql", "struct", "class", 
-        "funcion", "error", "memoria", "algoritmo", "http", "api", "linux"
+        // lenguajes
+        "c", "c++", "c#", "python", "java", "javascript", "js", "typescript", "ts", "go", "golang",
+        "rust", "php", "ruby", "kotlin", "swift", "dart", "bash", "shell", "powershell", "sql", "r",
+        // datos y formatos
+        "json", "yaml", "xml", "csv", "excel", "html", "css", "markdown",
+        // plataformas y entorno
+        "linux", "windows", "macos", "android", "ios", "docker", "kubernetes", "aws", "azure", "gcp",
+        "react", "node", "django", "flask", ".net", "dotnet", "postgres", "mysql", "sqlserver",
+        // conceptos técnicos
+        "struct", "class", "clase", "funcion", "function", "error", "bug", "memoria", "algoritmo",
+        "http", "api", "endpoint", "query", "consulta", "servidor", "server"
     };
 
+    // Verbos de petición abierta en español e inglés (sin acentos).
     std::vector<std::string> verbos_abiertos = {
-        "hazme", "crea", "mejora", "optimiza", "ayudame", "analiza", "como"  // ya sin acentos
+        "hazme", "haz", "crea", "mejora", "optimiza", "ayudame", "analiza", "como",
+        "make", "create", "improve", "optimize", "help", "analyze", "how", "build"
     };
 
     // Minúsculas + supresión de diacríticos del español en UTF-8
@@ -125,13 +137,15 @@ public:
             };
         }
 
-        // 2. Caso Amplio pero Deduciable: Propuesta de Hipótesis Guiada (>= 7 palabras)
+        // 2. Caso amplio (>= 7 palabras) sin entorno explícito: se responde de forma general
+        //    y solo se avisa al usuario. NO se inyecta ningún supuesto en su mensaje
+        //    (antes se añadía "Entorno: C++ ...", lo que cambiaba la petición sin avisar).
         if (num_palabras >= 7 && conteo_anclajes == 0 && tiene_verbo_abierto) {
             return {
                 ModoTriaje::PROPUESTA_HIPOTESIS,
-                "Dada tu consulta, deduzco que buscas una solución estándar optimizada en C++. "
-                "¿Avanzamos por esa vía o prefieres acotar algún detalle?",
-                "Entorno: C++ estándar, optimización de rendimiento y baja latencia. "
+                "No detecté lenguaje, entorno ni restricción concretos; responderé de forma general. "
+                "Si tienes alguno en mente, indícalo en tu siguiente mensaje.",
+                ""
             };
         }
 

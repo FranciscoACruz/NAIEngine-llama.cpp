@@ -134,6 +134,10 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
 
+// [NAI] cabeza de salida del modelo (output.weight) en F32, [n_vocab][n_embd].
+// Devuelve 0 si el modelo no tiene una cabeza compatible (p. ej. cabezas múltiples).
+LLAMA_API uint32_t llama_model_get_output_head(const struct llama_model * model, float * out);
+
 //
 // [NAI] Masa semántica y desalojo selectivo del KV cache
 //
@@ -169,3 +173,11 @@ LLAMA_API void llama_nai_notificar_desalojo(
 // Marca todas las posiciones de seq_id como protegidas (masa 1.0). Usar al cargar
 // un estado guardado en la secuencia (p. ej. al restaurar una sesión NAI).
 LLAMA_API void llama_nai_limpiar_masa(struct llama_context * ctx, llama_seq_id seq_id);
+
+// [NAI] Memoria gravitatoria (EXPERIMENTAL, cambia la salida del modelo).
+// Suma a la máscara de atención el sesgo -gamma * (pos_q - pos_k) / (masa_k + eps) para los
+// tokens con masa medida (< 1). Los tokens protegidos (prompt, sistema) no se atenúan.
+// Activa el mapa de masa si hace falta. gamma <= 0 la desactiva.
+// Valores de referencia: gamma 1e-4 .. 1e-3, eps 0.05.
+// Devuelve false si la memoria del modelo no la admite (recurrente / híbrida).
+LLAMA_API bool llama_nai_set_gravedad(struct llama_context * ctx, float gamma, float eps);

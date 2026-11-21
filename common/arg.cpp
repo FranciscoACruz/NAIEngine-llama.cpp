@@ -1685,6 +1685,39 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_DESALOJO"));
     add_opt(common_arg(
+        {"--nai-gravedad"}, "GAMMA",
+        "[NAI] EXPERIMENTAL: memoria gravitatoria. Atenúa la atención hacia tokens generados de baja masa "
+        "con el sesgo -GAMMA*dt/(masa+eps); el prompt no se atenúa. Cambia la salida del modelo. "
+        "Referencia: 1e-4 a 1e-3 (default: 0 = desactivada)",
+        [](common_params & params, const std::string & value) {
+            const float v = std::stof(value);
+            if (v < 0.0f) {
+                throw std::invalid_argument("--nai-gravedad debe ser >= 0");
+            }
+            params.nai_gravedad = v;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_NAI_GRAVEDAD"));
+    add_opt(common_arg(
+        {"--nai-gravedad-eps"}, "EPS",
+        string_format("[NAI] epsilon de la memoria gravitatoria (default: %.2f)", (double) params.nai_gravedad_eps),
+        [](common_params & params, const std::string & value) {
+            const float v = std::stof(value);
+            if (v <= 0.0f) {
+                throw std::invalid_argument("--nai-gravedad-eps debe ser > 0");
+            }
+            params.nai_gravedad_eps = v;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_NAI_GRAVEDAD_EPS"));
+    add_opt(common_arg(
+        {"--nai-traza"}, "PREFIJO",
+        "[NAI] registra la traza del planificador en PREFIJO-pasos.csv (un renglón por decode: tokens de "
+        "prefill y generación, KV usado, cola, tiempo) y PREFIJO-tareas.csv (llegada, inicio, primer token, "
+        "fin y tamaños de cada petición). Sirve para calibrar tools/nai/sim/nai_planificador_sim.py",
+        [](common_params & params, const std::string & value) {
+            params.nai_traza = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_TRAZA"));
+    add_opt(common_arg(
         {"--nai-sesiones"}, "DIR",
         "[NAI] activar sesiones persistentes: guarda el estado de cada conversación (campo \"nai_session\" "
         "de la petición) en DIR y lo restaura cuando la sesión vuelve (default: desactivado)",

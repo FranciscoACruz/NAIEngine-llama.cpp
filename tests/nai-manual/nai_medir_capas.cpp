@@ -8,13 +8,16 @@
 //   - capa de resolución = primera capa desde la que la lente coincide con la predicción
 //                          final y ya no cambia: a partir de ahí las capas restantes
 //                          no cambian la decisión y podrían liberarse.
+//   - regla del README   = salir en la primera capa con Δh = 1 - H(softmax(lente))/ln|V| > τ;
+//                          para varias τ se informa cuántos tokens saldrían antes, cuántos
+//                          conservarían el token final y qué fracción de capas se ahorraría.
 //
 // No modifica el motor: usa el callback de evaluación de ggml. Funciona con cualquier
 // backend (CPU, Metal, CUDA, Vulkan) y con arquitecturas que nombren "l_out" y
 // "result_norm" (llama, qwen2 y la mayoría).
 //
-// La lente es exacta en modelos con embeddings atados (tie_word_embeddings, p. ej.
-// Qwen2.5 0.5B-3B). En modelos no atados se informa como aproximada.
+// La lente usa la cabeza de salida real del modelo (output.weight), así que es exacta
+// también en modelos sin embeddings atados; se verifica contra el token final.
 //
 // Uso:
 //   nai_medir_capas -m modelo.gguf [-p "prompt"] [-n 64] [--lente-cada K]
@@ -101,6 +104,31 @@ static int argmax_lente(const std::vector<float> & E, int n_vocab, int n_embd, c
     return best;
 }
 
+// Lente completa: devuelve el argmax y la inercia latente del README,
+//   Δh = 1 - H(softmax(z)) / ln|V|     (entropía espectral normalizada; 1 = certeza total)
+static int lente_dh(const std::vector<float> & E, int n_vocab, int n_embd, const std::vector<float> & x,
+                    std::vector<float> & z, double & dh) {
+    z.resize(n_vocab);
+    int best = 0;
+    for (int v = 0; v < n_vocab; ++v) {
+        const float * e = E.data() + (size_t) v * n_embd;
+        float acc = 0.0f;
+        for (int i = 0; i < n_embd; ++i) acc += e[i] * x[i];
+        z[v] = acc;
+        if (acc > z[best]) best = v;
+    }
+    const double zmax = z[best];
+    double sum = 0.0, sum_zd = 0.0;
+    for (int v = 0; v < n_vocab; ++v) {
+        const double d = (double) z[v] - zmax;
+        const double e = std::exp(d);
+        sum += e; sum_zd += e * d;
+    }
+    const double H = std::log(sum) - sum_zd / sum;     // entropía en nats
+    dh = 1.0 - H / std::log((double) n_vocab);
+    return best;
+}
+
 int main(int argc, char ** argv) {
     std::string ruta, prompt = "Explica en pocas palabras qué es una cuenta de ahorro:";
     int n_pred = 64, lente_cada = 1, n_threads = 4;
@@ -145,9 +173,14 @@ int main(int argc, char ** argv) {
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) { fprintf(stderr, "no se pudo crear el contexto\n"); return 1; }
 
-    // cabeza de salida (embeddings de entrada; exacta si el modelo los ata)
+    // cabeza de salida real del modelo (output.weight); si no se puede leer, se recurre a los
+    // embeddings de entrada (exacto solo con embeddings atados)
     std::vector<float> E((size_t) n_vocab * n_embd);
-    if (llama_model_get_tok_embd(model, E.data()) == 0) { fprintf(stderr, "no se pudieron leer los embeddings\n"); return 1; }
+    bool cabeza_real = llama_model_get_output_head(model, E.data()) != 0;
+    if (!cabeza_real && llama_model_get_tok_embd(model, E.data()) == 0) {
+        fprintf(stderr, "no se pudieron leer ni la cabeza de salida ni los embeddings\n");
+        return 1;
+    }
 
     std::vector<llama_token> toks(prompt.size() + 16);
     const int n_p = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(), toks.data(), (int) toks.size(), true, true);
@@ -160,6 +193,13 @@ int main(int argc, char ** argv) {
     bool lente_exacta = false, lente_verificada = false;
 
     std::vector<int>    capa_res;  // capa de resolución por token
+
+    // [NAI] Regla de salida temprana del README: salir en la primera capa con Δh > τ.
+    // Para cada τ se mide (a) si el token de esa capa coincide con el final y (b) las capas ahorradas.
+    const std::vector<double> taus = {0.50, 0.60, 0.70, 0.80, 0.90, 0.95};
+    std::vector<int>    tau_aciertos(taus.size(), 0), tau_salidas(taus.size(), 0);
+    std::vector<double> tau_ahorro(taus.size(), 0.0);
+    std::vector<float>  z_buf;
     std::vector<double> dh_sum(n_layer, 0.0), sim_sum(n_layer, 0.0);
     int n_medidos = 0;
 
@@ -196,6 +236,26 @@ int main(int argc, char ** argv) {
             }
             capa_res.push_back(resuelto);
 
+            // [NAI] Δh del README por capa (se evalúa la lente en cada capa muestreada)
+            std::vector<int>    arg_l(n_layer, -1);
+            std::vector<double> dh_l (n_layer, -1.0);
+            for (int l = 0; l < n_layer - 1; ++l) {
+                if (l % lente_cada != 0) continue;
+                auto x = rms(cap.capas[l]);
+                for (int i = 0; i < n_embd; ++i) x[i] *= gamma[i];
+                arg_l[l] = lente_dh(E, n_vocab, n_embd, x, z_buf, dh_l[l]);
+            }
+            for (size_t k = 0; k < taus.size(); ++k) {
+                int salida = n_layer - 1; // sin salida temprana: capa final (siempre correcta)
+                for (int l = 0; l < n_layer - 1; ++l) {
+                    if (dh_l[l] > taus[k]) { salida = l; break; }
+                }
+                const int tok_salida = salida == n_layer - 1 ? tok_final : arg_l[salida];
+                if (salida < n_layer - 1) tau_salidas[k]++;
+                if (tok_salida == tok_final) tau_aciertos[k]++;
+                tau_ahorro[k] += (double) (n_layer - (salida + 1)) / n_layer;
+            }
+
             std::string barra;
             for (int l = 0; l < n_layer; ++l) {
                 const double sim_f = coseno(cap.capas[l], cap.capas[n_layer - 1]);
@@ -225,7 +285,8 @@ int main(int argc, char ** argv) {
     }
 
     // resumen: distribución de capas de resolución ("niveles" de la autopista)
-    printf("\nLente %s.\n", lente_exacta ? "EXACTA (embeddings atados)" : "APROXIMADA (modelo con cabeza de salida separada)");
+    printf("\nLente %s (%s).\n", lente_exacta ? "EXACTA" : "APROXIMADA",
+           cabeza_real ? "cabeza de salida del modelo" : "embeddings de entrada como cabeza");
     printf("\nResolución por cuartos de la red (qué fracción de tokens ya está decidida):\n");
     for (int q = 1; q <= 4; ++q) {
         const int lim = n_layer * q / 4;
@@ -236,6 +297,16 @@ int main(int argc, char ** argv) {
     for (int c : capa_res) libre += (double) (n_layer - (c + 1)) / n_layer;
     printf("\nCapas que podrían liberarse en promedio (sin cambiar el token): %.1f%%\n", 100.0 * libre / capa_res.size());
     printf("(cota superior: no incluye el costo de decidir la salida ni el KV de las capas omitidas)\n");
+
+    printf("\nRegla del README: salir en la primera capa con Δh = 1 - H/ln|V| > τ\n");
+    printf("  %-6s %-14s %-22s %s\n", "τ", "salen antes", "token correcto", "capas ahorradas");
+    for (size_t k = 0; k < taus.size(); ++k) {
+        const double n = (double) capa_res.size();
+        printf("  %-6.2f %6.1f%%        %6.1f%%                %6.1f%%\n", taus[k],
+               100.0 * tau_salidas[k] / n, 100.0 * tau_aciertos[k] / n, 100.0 * tau_ahorro[k] / n);
+    }
+    printf("  (\"token correcto\" < 100%% significa que esa τ cambiaría la salida del modelo;\n");
+    printf("   para usar la regla sin pérdida, combínala con verificación especulativa: tools/nai/)\n");
 
     printf("\nPerfil medio por capa:\n  capa   Δh medio   sim. con estado final\n");
     for (int l = 0; l < n_layer; ++l) {

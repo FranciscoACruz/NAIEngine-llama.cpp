@@ -45,22 +45,58 @@ static_assert(sizeof(NaiSession) == 64, "NaiSession debe ocupar exactamente una 
 
 namespace nai {
 
-// Hash de 64 bits (FNV-1a + mezcla final de splitmix64) para identificadores de sesión.
-// Nunca devuelve NAI_EMPTY_HANDLE ni NAI_TOMBSTONE_HANDLE.
-inline uint64_t hash_sesion(const std::string & id) {
-    uint64_t h = 1469598103934665603ULL;
-    for (unsigned char c : id) {
-        h ^= c;
-        h *= 1099511628211ULL;
+// Clave secreta de 128 bits para el hash de sesiones.
+struct ClaveSesion {
+    uint64_t k0 = 0;
+    uint64_t k1 = 0;
+};
+
+// SipHash-2-4 (Aumasson & Bernstein): PRF con clave de 64 bits de salida.
+// Con una clave secreta, un cliente no puede fabricar un identificador cuyo hash
+// coincida con el de otra sesión (con FNV sin clave sí era posible).
+inline uint64_t siphash24(const void * datos, size_t n, const ClaveSesion & k) {
+    auto rotl = [](uint64_t x, int b) { return (x << b) | (x >> (64 - b)); };
+    uint64_t v0 = 0x736f6d6570736575ULL ^ k.k0;
+    uint64_t v1 = 0x646f72616e646f6dULL ^ k.k1;
+    uint64_t v2 = 0x6c7967656e657261ULL ^ k.k0;
+    uint64_t v3 = 0x7465646279746573ULL ^ k.k1;
+    auto ronda = [&]() {
+        v0 += v1; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32);
+        v2 += v3; v3 = rotl(v3, 16); v3 ^= v2;
+        v0 += v3; v3 = rotl(v3, 21); v3 ^= v0;
+        v2 += v1; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32);
+    };
+    const unsigned char * p = static_cast<const unsigned char *>(datos);
+    const size_t fin = n - (n % 8);
+    for (size_t i = 0; i < fin; i += 8) {
+        uint64_t m = 0;
+        for (int b = 0; b < 8; ++b) m |= static_cast<uint64_t>(p[i + b]) << (8 * b); // little-endian
+        v3 ^= m; ronda(); ronda(); v0 ^= m;
     }
-    h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
-    h ^= h >> 27; h *= 0x94d049bb133111ebULL;
-    h ^= h >> 31;
+    uint64_t b = static_cast<uint64_t>(n) << 56;
+    for (size_t i = 0; i < n % 8; ++i) b |= static_cast<uint64_t>(p[fin + i]) << (8 * i);
+    v3 ^= b; ronda(); ronda(); v0 ^= b;
+    v2 ^= 0xff;
+    ronda(); ronda(); ronda(); ronda();
+    return v0 ^ v1 ^ v2 ^ v3;
+}
+
+// Hash de 64 bits de un identificador de sesión.
+// Nunca devuelve NAI_EMPTY_HANDLE ni NAI_TOMBSTONE_HANDLE.
+// El servidor siempre pasa su clave secreta (ver --nai-sesiones); la clave cero
+// solo se usa en pruebas.
+inline uint64_t hash_sesion(const std::string & id, const ClaveSesion & clave = ClaveSesion{}) {
+    uint64_t h = siphash24(id.data(), id.size(), clave);
     if (h == NAI_EMPTY_HANDLE || h == NAI_TOMBSTONE_HANDLE) {
         h = 1;
     }
     return h;
 }
+
+// Longitud mínima recomendada de un identificador de sesión. Quien conoce el id
+// puede recuperar la conversación, así que debe ser un secreto no adivinable
+// (p. ej. 128 bits aleatorios en hex = 32 caracteres), no "usuario-1".
+constexpr size_t NAI_SESION_ID_MIN_RECOMENDADO = 16;
 
 class NaiSessionTable {
 public:

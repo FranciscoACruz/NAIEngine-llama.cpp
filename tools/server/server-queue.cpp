@@ -27,6 +27,9 @@ int server_queue::post(server_task && task, bool front) {
         cleanup_pending_task(task.id_target);
     }
     const int task_id = task.id;
+    if (task.t_llegada_us == 0) {
+        task.t_llegada_us = ggml_time_us(); // [NAI] traza
+    }
     QUE_DBG("new task, id = %d, front = %d\n", task_id, front);
     if (front) {
         queue_tasks.push_front(std::move(task));
@@ -47,6 +50,9 @@ int server_queue::post(std::vector<server_task> && tasks, bool front) {
         // if this is cancel task make sure to clean up pending tasks
         if (task.type == SERVER_TASK_TYPE_CANCEL) {
             cleanup_pending_task(task.id_target);
+        }
+        if (task.t_llegada_us == 0) {
+            task.t_llegada_us = ggml_time_us(); // [NAI] traza
         }
         QUE_DBG("new task, id = %d/%d, front = %d\n", task.id, (int) tasks.size(), front);
         if (front) {
