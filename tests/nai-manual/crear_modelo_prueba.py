@@ -4,6 +4,10 @@
 # El texto que genera no tiene sentido: sirve para validar el código, no la calidad.
 #
 #   python3 tests/nai-manual/crear_modelo_prueba.py /tmp/nai-prueba.gguf [--capas 8]
+#
+# Con la forma de Qwen2.5-0.5B (vocabulario de 152k, para medir costos realistas por token):
+#   python3 tests/nai-manual/crear_modelo_prueba.py /tmp/qwen05-forma.gguf --vocab models/ggml-vocab-qwen2.gguf \
+#       --capas 24 --embd 896 --cabezas 14 --cabezas-kv 2 --ff 4864 --f16
 
 from __future__ import annotations
 
@@ -25,6 +29,8 @@ def main() -> int:
     ap.add_argument("--capas", type=int, default=8)
     ap.add_argument("--embd", type=int, default=64)
     ap.add_argument("--cabezas", type=int, default=4)
+    ap.add_argument("--cabezas-kv", type=int, default=0, help="0 = igual que --cabezas (sin GQA)")
+    ap.add_argument("--f16", action="store_true", help="pesos en F16 (la mitad de tamaño)")
     ap.add_argument("--ff", type=int, default=128)
     ap.add_argument("--ctx", type=int, default=4096)
     ap.add_argument("--semilla", type=int, default=1234)
@@ -39,10 +45,11 @@ def main() -> int:
     w.add_block_count(a.capas)
     w.add_feed_forward_length(a.ff)
     w.add_head_count(a.cabezas)
-    w.add_head_count_kv(a.cabezas)
+    kv = a.cabezas_kv or a.cabezas
+    w.add_head_count_kv(kv)
     w.add_layer_norm_rms_eps(1e-5)
     w.add_rope_dimension_count(a.embd // a.cabezas)
-    w.add_file_type(gguf.LlamaFileType.ALL_F32)
+    w.add_file_type(gguf.LlamaFileType.MOSTLY_F16 if a.f16 else gguf.LlamaFileType.ALL_F32)
 
     n_vocab = 0
     for campo in vocab.fields.values():
@@ -61,15 +68,17 @@ def main() -> int:
     rng = np.random.default_rng(a.semilla)
 
     def mat(filas: int, cols: int, escala: float) -> np.ndarray:
-        return (rng.standard_normal((filas, cols)) * escala).astype(np.float32)
+        m = (rng.standard_normal((filas, cols), dtype=np.float32) * escala)
+        return m.astype(np.float16) if a.f16 else m
 
     e, ff = a.embd, a.ff
+    e_kv = e // a.cabezas * kv
     w.add_tensor("token_embd.weight", mat(n_vocab, e, 0.5))
     for i in range(a.capas):
         w.add_tensor(f"blk.{i}.attn_norm.weight", np.ones(e, dtype=np.float32))
         w.add_tensor(f"blk.{i}.attn_q.weight", mat(e, e, e ** -0.5))
-        w.add_tensor(f"blk.{i}.attn_k.weight", mat(e, e, e ** -0.5))
-        w.add_tensor(f"blk.{i}.attn_v.weight", mat(e, e, e ** -0.5))
+        w.add_tensor(f"blk.{i}.attn_k.weight", mat(e_kv, e, e ** -0.5))
+        w.add_tensor(f"blk.{i}.attn_v.weight", mat(e_kv, e, e ** -0.5))
         w.add_tensor(f"blk.{i}.attn_output.weight", mat(e, e, 0.2 * e ** -0.5))
         w.add_tensor(f"blk.{i}.ffn_norm.weight", np.ones(e, dtype=np.float32))
         w.add_tensor(f"blk.{i}.ffn_gate.weight", mat(ff, e, e ** -0.5))

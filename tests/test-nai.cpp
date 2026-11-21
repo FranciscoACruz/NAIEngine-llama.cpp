@@ -78,6 +78,17 @@ static void test_sorpresa() {
             NAI_CHECK(std::fabs(nai::sorpresa_normalizada(l.data(), l.size(), t) - m_exacta) < 0.002f);
         }
     }
+    // exp_rapido: error relativo < 2e-6 en [-16, 0]
+    for (float x = -16.0f; x <= 0.0f; x += 0.01f) {
+        NAI_CHECK(std::fabs(nai::exp_rapido(x) / std::exp((double) x) - 1.0) < 2e-6);
+    }
+    // NaN sueltos se ignoran; todo NaN o todo -inf => masa protegida
+    {
+        std::vector<float> con_nan = {1.0f, NAN, 3.0f, 2.0f};
+        NAI_CHECK(std::isfinite(nai::log_sum_exp_rapido(con_nan.data(), con_nan.size())));
+        std::vector<float> menos_inf(8, -INFINITY);
+        NAI_CHECK(nai::sorpresa_normalizada(menos_inf.data(), menos_inf.size(), 0) == nai::MASA_PROTEGIDA);
+    }
     std::printf("[test-nai] sorpresa OK\n");
 }
 
