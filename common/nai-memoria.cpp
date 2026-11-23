@@ -353,7 +353,7 @@ motor::motor(llama_model * m, int n_threads, std::vector<region> rs) : model(m),
     cp.n_ctx           = N_CTX_MOTOR;
     cp.n_batch         = N_CTX_MOTOR;
     cp.n_ubatch        = 512;
-    cp.n_seq_max       = (uint32_t) regs.size() + 1;   // seq 0 = trabajo; 1..N = una por región al clasificar
+    cp.n_seq_max       = 2 * (uint32_t) regs.size() + 1;   // seq 0 = trabajo; 1..2N = una por forma de cada región
     cp.kv_unified      = true;                         // las regiones comparten las celdas del prompt
     cp.n_threads       = std::max(1, n_threads);
     cp.n_threads_batch = std::max(1, n_threads);
@@ -554,12 +554,30 @@ void motor::limpiar() {
     en_kv.clear();
 }
 
-std::vector<double> motor::puntuar_regiones(const std::string & texto) {
-    std::vector<double> sc(regs.size(), -1e30);
-    // Lo fijo (instrucción y temas) va primero y el texto al final: entre llamadas solo se evalúa el texto.
+// Mayúscula inicial: ASCII y las letras latinas de 2 bytes en UTF-8 (á é í ó ú ñ ü ...).
+static std::string mayuscula_inicial(std::string s) {
+    if (s.empty()) return s;
+    const unsigned char c = (unsigned char) s[0];
+    if (c >= 'a' && c <= 'z') s[0] = (char) (c - 32);
+    else if (c == 0xC3 && s.size() > 1) {
+        const unsigned char d = (unsigned char) s[1];
+        if (d >= 0xA0 && d <= 0xBE && d != 0xB7) s[1] = (char) (d - 0x20);
+    }
+    return s;
+}
+
+// Encabezado fijo + texto. Sin texto devuelve solo el encabezado (termina en «).
+std::string motor::instruccion_clasificar(const std::string & texto) const {
     std::string temas;
     for (auto & r : regs) temas += "- " + r.nombre + (r.semilla.empty() ? "" : ": " + r.semilla) + "\n";
     const std::string cab = "Clasifica el texto en uno de estos temas:\n" + temas + "\nResponde solo con el nombre del tema.\nTexto: «";
+    return texto.empty() ? cab : cab + recortar(colapsar(texto), 700) + "»";
+}
+
+std::vector<double> motor::puntuar_regiones(const std::string & texto) {
+    std::vector<double> sc(regs.size(), -1e30);
+    // Lo fijo (instrucción y temas) va primero y el texto al final: entre llamadas solo se evalúa el texto.
+    const std::string cab = instruccion_clasificar("");
     std::string t = recortar(colapsar(texto), 700);
     std::vector<llama_token> tp;
     for (;;) {
@@ -568,9 +586,20 @@ std::vector<double> motor::puntuar_regiones(const std::string & texto) {
         t = recortar(t, t.size() * 3 / 4);            // el texto cede, los temas no
     }
     // los nombres van todos en un lote después del prompt: deben caber juntos
-    std::vector<std::vector<llama_token>> nombres(regs.size());
+    // Cada región se puntúa con su nombre tal cual y con mayúscula inicial ("física" / "Física"):
+    // un modelo de chat suele empezar su respuesta con mayúscula y ambas formas significan lo mismo.
+    struct variante { size_t reg; std::vector<llama_token> tok; };
+    std::vector<variante> vars;
     size_t n_nom = 0;
-    for (size_t i = 0; i < regs.size(); ++i) { nombres[i] = tokenizar(regs[i].nombre, false); n_nom += nombres[i].size(); }
+    for (size_t i = 0; i < regs.size(); ++i) {
+        const std::string formas[2] = { regs[i].nombre, mayuscula_inicial(regs[i].nombre) };
+        for (int f = 0; f < (formas[1] == formas[0] ? 1 : 2); ++f) {
+            std::vector<llama_token> tk = tokenizar(formas[f], false);
+            if (tk.empty()) continue;
+            n_nom += tk.size();
+            vars.push_back({ i, std::move(tk) });
+        }
+    }
     while ((int) (tp.size() + n_nom) + 8 >= N_CTX_MOTOR && !t.empty()) {
         t  = recortar(t, t.size() * 3 / 4);
         tp = tokenizar(plantilla(cab + t + "»"), true);
@@ -615,34 +644,42 @@ std::vector<double> motor::puntuar_regiones(const std::string & texto) {
         return (double) (lg[tok] - mx) - std::log(z);
     };
     const float * l0 = llama_get_logits_ith(ctx, -1);
-    for (size_t i = 0; i < regs.size(); ++i) if (!nombres[i].empty()) sc[i] = logp(l0, nombres[i][0]);
+    std::vector<double> sv(vars.size());
+    for (size_t v = 0; v < vars.size(); ++v) sv[v] = logp(l0, vars[v].tok[0]);
 
-    // Resto de cada nombre: región i = secuencia i+1, que comparte el prompt (seq_cp no copia datos
-    // con KV unificado). Todas las regiones van en un solo decode.
-    llama_batch b = llama_batch_init((int32_t) n_nom, 0, 1);
-    std::vector<std::pair<size_t, llama_token>> sig;   // para cada salida: región y token que debe seguir
-    for (size_t i = 0; i < regs.size(); ++i) {
-        if (nombres[i].size() < 2) continue;
-        llama_memory_seq_cp(mem, 0, (llama_seq_id) (i + 1), 0, (llama_pos) tp.size());
-        for (size_t k = 0; k + 1 < nombres[i].size(); ++k) {
+    // Resto de cada nombre: variante v = secuencia v+1, que comparte el prompt (seq_cp no copia datos
+    // con KV unificado). Todas las variantes van en un solo decode.
+    llama_batch b = llama_batch_init((int32_t) std::max<size_t>(1, n_nom), 0, 1);
+    std::vector<std::pair<size_t, llama_token>> sig;   // para cada salida: variante y token que debe seguir
+    for (size_t v = 0; v < vars.size(); ++v) {
+        const auto & tk = vars[v].tok;
+        if (tk.size() < 2) continue;
+        llama_memory_seq_cp(mem, 0, (llama_seq_id) (v + 1), 0, (llama_pos) tp.size());
+        for (size_t k = 0; k + 1 < tk.size(); ++k) {
             const int j = b.n_tokens++;
-            b.token[j]     = nombres[i][k];
+            b.token[j]     = tk[k];
             b.pos[j]       = (llama_pos) (tp.size() + k);
             b.n_seq_id[j]  = 1;
-            b.seq_id[j][0] = (llama_seq_id) (i + 1);
+            b.seq_id[j][0] = (llama_seq_id) (v + 1);
             b.logits[j]    = true;
-            sig.push_back({ i, nombres[i][k + 1] });
+            sig.push_back({ v, tk[k + 1] });
         }
     }
     if (b.n_tokens > 0) {
         if (llama_decode(ctx, b) == 0) {
-            for (int j = 0; j < b.n_tokens; ++j) sc[sig[j].first] += logp(llama_get_logits_ith(ctx, j), sig[j].second);
+            for (int j = 0; j < b.n_tokens; ++j) sv[sig[j].first] += logp(llama_get_logits_ith(ctx, j), sig[j].second);
         } else {
-            for (auto & s2 : sig) sc[s2.first] = -1e30;
+            for (auto & s2 : sig) sv[s2.first] = -1e30;
         }
     }
     llama_batch_free(b);
-    for (size_t i = 0; i < regs.size(); ++i) llama_memory_seq_rm(mem, (llama_seq_id) (i + 1), -1, -1);
+    for (size_t v = 0; v < vars.size(); ++v) llama_memory_seq_rm(mem, (llama_seq_id) (v + 1), -1, -1);
+    // p(región) = p(forma 1) + p(forma 2), en logaritmos
+    for (size_t v = 0; v < vars.size(); ++v) {
+        double & r = sc[vars[v].reg];
+        const double x = sv[v];
+        r = r < -1e29 ? x : std::max(r, x) + std::log1p(std::exp(-std::fabs(r - x)));
+    }
     return sc;
 }
 

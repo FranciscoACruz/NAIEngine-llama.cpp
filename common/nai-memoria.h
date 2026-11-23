@@ -140,6 +140,10 @@ public:
     // Región más probable: log p(nombre | temas con su semilla, texto) para cada región, menos el mismo
     // valor con un texto vacío (calibración: quita la preferencia del modelo por la primera opción).
     int clasificar(const std::string & texto, bool calibrado = true);
+    // log p(nombre de cada región | instrucción, texto), sin calibrar (diagnóstico)
+    std::vector<double> puntuar_regiones(const std::string & texto);
+    // la instrucción que ve el modelo al clasificar (diagnóstico: generar() con ella da su respuesta libre)
+    std::string instruccion_clasificar(const std::string & texto) const;
     std::string generar(const std::string & instruccion, int n_max);
 
     estadisticas medir(const memoria & m) const;
@@ -165,7 +169,6 @@ private:
     std::string plantilla(const std::string & usuario) const;
     bool evaluar(const std::vector<llama_token> & t);
     void limpiar();   // vacía el KV del motor (y la caché de prefijo)
-    std::vector<double> puntuar_regiones(const std::string & texto);
 
     llama_model *       model = nullptr;
     const llama_vocab * vocab = nullptr;

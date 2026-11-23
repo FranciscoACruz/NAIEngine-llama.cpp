@@ -9,7 +9,7 @@
 //   6. aprender de un archivo o URL (opcional)
 //
 // Uso:
-//   nai_memoria -m modelo.gguf [-t 4] [--memoria BYTES] [-c "lápiz"] [-f recuerdos.txt] [--compacta]
+//   nai_memoria -m modelo.gguf [-t 4] [--memoria BYTES] [-c "lápiz"] [-f recuerdos.txt] [--compacta] [--diag]
 //               [--aprender archivo|URL] [--consulta "pregunta"] [--guardar mem.bin] [--cargar mem.bin]
 //               [-r regiones.txt] [--escribir-regiones regiones.txt]
 //   nai_memoria -m modelo.gguf --cargar DIR/biblioteca.mem --exportar recuerdos.jsonl [-r regiones.txt]
@@ -103,6 +103,7 @@ int main(int argc, char ** argv) {
     long memoria_bytes = 0;
     int n_threads = 4;
     bool compacta = false; // [NAI] --compacta: codificar con el modelo
+    bool diag     = false; // [NAI] --diag: por qué el clasificador elige cada región
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto sig = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -119,6 +120,7 @@ int main(int argc, char ** argv) {
         else if (a == "--exportar") exportar = sig();
         else if (a == "--clave") ruta_clave = sig();
         else if (a == "--compacta") compacta = true;
+        else if (a == "--diag") diag = true;
         else if (a == "--consulta") { if (!consultas_propias) consultas.clear(); consultas_propias = true; consultas.push_back(sig()); }
         else { fprintf(stderr, "opción desconocida: %s\n", a.c_str()); return 1; }
     }
@@ -186,6 +188,27 @@ int main(int argc, char ** argv) {
         ejemplos = recuerdos_por_defecto();
     }
 
+    if (diag) {
+        printf("\n== Diagnóstico del clasificador ==\n");
+        const std::vector<double> cal = mot.puntuar_regiones("N/A");
+        int k = 0;
+        for (auto & e : ejemplos) {
+            if (!e.region[0] || k++ >= 4) continue;
+            const std::string libre = mot.generar(mot.instruccion_clasificar(e.texto), 12);
+            const std::vector<double> sc = mot.puntuar_regiones(e.texto);
+            std::vector<size_t> o1(sc.size()), o2(sc.size());
+            for (size_t i = 0; i < sc.size(); ++i) o1[i] = o2[i] = i;
+            std::sort(o1.begin(), o1.end(), [&](size_t a, size_t b) { return sc[a] > sc[b]; });
+            std::sort(o2.begin(), o2.end(), [&](size_t a, size_t b) { return sc[a] - cal[a] > sc[b] - cal[b]; });
+            printf("  [%s] %s\n    respuesta libre: \"%s\"\n    sin calibrar:", e.region, e.texto, libre.c_str());
+            for (int j = 0; j < 3; ++j) printf(" %s %.2f", regs[o1[j]].nombre.c_str(), sc[o1[j]]);
+            printf("\n    calibrada:   ");
+            for (int j = 0; j < 3; ++j) printf(" %s %.2f", regs[o2[j]].nombre.c_str(), sc[o2[j]] - cal[o2[j]]);
+            const int esp = indice_region(regs, e.region);
+            if (esp >= 0) printf("\n    esperada: %s  bruto %.2f  calibrado %.2f", e.region, sc[esp], sc[esp] - cal[esp]);
+            printf("\n");
+        }
+    }
     printf("\n== 1-2. Clasificación por el modelo y reconstrucción exacta ==\n");
     int aciertos = 0, con_etiqueta = 0, exactos = 0;
     size_t bytes_texto = 0;
