@@ -116,7 +116,7 @@ Los binarios quedan en `build/bin/`. En Windows, en `build\bin\Release\`.
 ./build/bin/test-nai
 ```
 
-No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, telemetría concurrente, triaje, SipHash-2-4 (vectores oficiales) y la tabla de sesiones. También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
+No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, telemetría concurrente, triaje, SipHash-2-4 (vectores oficiales), la tabla de sesiones, las claves y el troceo de la memoria, la lectura de HTML y ChaCha20-Poly1305 (vector oficial del RFC 8439). También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
 
 ### 2.6 Descargar un modelo
 
@@ -159,13 +159,58 @@ curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/jso
 
 Si el servidor se reinicia o el slot se reutiliza, la siguiente petición con el mismo id restaura el KV cache del disco en lugar de reprocesar toda la conversación (§5.8).
 
-### 3.3 Línea de comandos
+### 3.3 Memoria reconstructiva y aprendizaje de documentos
+
+```console
+./build/bin/llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf --port 8080 --nai-sesiones ./sesiones --nai-memoria
+```
+
+Con la memoria activa, el cliente manda **solo el mensaje nuevo** con su `nai_session`; el servidor agrega los recuerdos y el turno anterior:
+
+```console
+curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d "{\"nai_session\":\"$SESION\",\"messages\":[{\"role\":\"user\",\"content\":\"¿Cuánto ahorro cada quincena?\"}]}"
+```
+
+Aprender de un texto, una URL o un archivo:
+
+```console
+curl http://localhost:8080/nai/aprender -H "Content-Type: application/json" -d "{\"url\":\"https://ejemplo.org/articulo-sobre-la-milpa\",\"region\":\"agricultura\"}"
+curl http://localhost:8080/nai/aprender -H "Content-Type: application/json" -d "{\"archivo\":\"$(base64 -i manual.pdf)\",\"nombre\":\"manual.pdf\"}"
+curl http://localhost:8080/nai/memoria
+```
+
+Para PDF instala poppler (`brew install poppler`). Word, RTF y Pages se leen con `textutil`, que viene con macOS; en Linux, con `pandoc`.
+
+### 3.4 Línea de comandos
 
 ```console
 ./build/bin/llama-cli -m qwen2.5-0.5b-instruct-q4_k_m.gguf --nai-triaje --nai-autopista
 ```
 
-### 3.4 Herramientas de medición (requieren modelo)
+### 3.5 Cifrado de sesiones y memorias
+
+```console
+mkdir -p ~/.nai && ./build/bin/llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf --nai-sesiones ./sesiones --nai-memoria --nai-cifrado ~/.nai/clave.hex
+```
+
+La primera vez se crea la clave (permisos 0600). Respáldala: sin ella las conversaciones guardadas no se recuperan. No la guardes dentro de `./sesiones`.
+
+### 3.6 Reentrenamiento por currículo (Mac con Apple Silicon)
+
+```console
+pip3 install mlx-lm safetensors numpy
+pip3 install -r requirements/requirements-convert_lora_to_gguf.txt
+mkdir -p ~/searxng
+printf 'use_default_settings: true\nserver:\n  secret_key: "%s"\n  limiter: false\nsearch:\n  formats:\n    - html\n    - json\n' "$(openssl rand -hex 32)" > ~/searxng/settings.yml
+docker run -d --name searxng -p 8888:8080 -v ~/searxng:/etc/searxng searxng/searxng
+python3 tools/nai/nai_reentrenar.py fuentes --servidor http://localhost:8080 --searxng http://localhost:8888 --esperar
+python3 tools/nai/nai_reentrenar.py todo --modelo qwen2.5-0.5b-instruct-q4_k_m.gguf --biblioteca sesiones/biblioteca.mem --servidor http://localhost:8080 --modelo-mlx mlx-community/Qwen2.5-0.5B-Instruct-4bit --base-hf Qwen/Qwen2.5-0.5B-Instruct
+./build/bin/llama-server -m qwen2.5-0.5b-instruct-q4_k_m.gguf --lora nai-reentreno/nai-adaptador.gguf --nai-sesiones ./sesiones --nai-memoria
+```
+
+Las líneas `mkdir`, `printf` y `docker run` levantan SearxNG en tu máquina (requiere Docker): crean su configuración con el formato JSON activado (`search.formats`), que el script necesita, y lo dejan en el puerto 8888. Si en lugar de eso usas Brave Search, crea una clave gratuita en su sitio y usa `--buscador brave --clave-brave TU_CLAVE`. El servidor de NAI debe estar corriendo con el modelo **base** y `--nai-memoria`. Si la biblioteca está cifrada, agrega `--clave ~/.nai/clave.hex` al paso `todo`. Cada paso (`exportar`, `datos`, `entrenar`, `medir`, `convertir`) se puede correr por separado; `--help` muestra las opciones.
+
+### 3.7 Herramientas de medición (requieren modelo)
 
 ```console
 ./build/bin/nai_medir_capas -m qwen2.5-0.5b-instruct-q4_k_m.gguf -n 64
@@ -187,6 +232,12 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 | Sesiones persistentes | `--nai-sesiones DIR` | apagadas | No | Guarda y restaura el KV cache de cada conversación |
 | Caducidad de sesiones | `--nai-sesion-ttl SEG` | `86400` (24 h) | — | Segundos sin actividad tras los que la sesión y su archivo se eliminan |
 | Triaje (CLI) | `--nai-triaje` | apagado | Solo pide aclaración | Detecta peticiones cortas y ambiguas y pregunta antes de generar |
+| Memoria reconstructiva | `--nai-memoria` (requiere `--nai-sesiones DIR`) | apagada | Cambia lo que ve el modelo: recuerdos en lugar del historial | La conversación no se acumula en el KV cache; se guarda comprimida con el modelo en una memoria fija por regiones |
+| Tamaño de la memoria por sesión | `--nai-memoria-bytes N` | `16384` | — | Presupuesto fijo de cada sesión |
+| Tamaño de la biblioteca | `--nai-biblioteca-bytes N` | `8388608` (8 MiB) | — | Presupuesto de lo aprendido de documentos |
+| Regiones de la memoria | `--nai-regiones ARCHIVO` | 26 integradas | — | Líneas `peso\|tema\|semilla` |
+| URLs de la red local | `--nai-lector-red-local` | rechazadas | — | Permite que `/nai/aprender` lea localhost o la red interna |
+| Cifrado en disco | `--nai-cifrado ARCHIVO` | sin cifrado | No | Cifra sesiones (KV) y memorias (`.mem`) con ChaCha20-Poly1305; la clave vive en ARCHIVO, fuera de la carpeta de sesiones |
 | Traza del planificador | `--nai-traza PREFIJO` | apagada | No | Escribe CSV por paso y por petición para calibrar el simulador del planificador |
 | Auto-especulación por capas | `-md borrador.gguf` | — | **No** | Borrador = primeras K capas del modelo, verificado por el modelo completo |
 
@@ -339,36 +390,67 @@ $$B_{KV} = n_{\text{capas}} \cdot 2 \cdot n_{\text{cabezas KV}} \cdot d_{\text{c
 **Seguridad:**
 - **El id es un secreto:** quien lo conozca puede recuperar la conversación. Genera ≥ 128 bits aleatorios (32 caracteres hex) en tu backend y lígalos al usuario autenticado. El servidor avisa si el id tiene menos de 16 caracteres.
 - **Permisos:** carpeta 0700, archivos y clave 0600.
-- **Sin cifrado:** los archivos contienen la conversación sin cifrar. Para datos sensibles (por ejemplo, financieros) usa un volumen cifrado (FileVault, LUKS, BitLocker).
+- **Cifrado:** sin `--nai-cifrado`, los archivos contienen la conversación sin cifrar. Con datos sensibles (por ejemplo, financieros) activa `--nai-cifrado` (§5.13) y, además, guarda la carpeta en un volumen cifrado (FileVault, LUKS, BitLocker).
 - **Limitación:** no se restauran sesiones con multimodal ni con decodificación especulativa.
 
 **Relación con `bloque_id`:** el campo `bloque_id` de la telemetría y la sesión está reservado para conectar NAI con un proyecto padre (generador de API de alto rendimiento) sin cambiar el formato.
 
-### 5.9 Memoria reconstructiva por regiones (`tests/nai-manual/nai_memoria.cpp`)
+### 5.9 Memoria reconstructiva por regiones (`--nai-memoria`, `common/nai-memoria.cpp`)
 
-Prototipo de memoria de tamaño fijo inspirada en la mente humana: los pesos del modelo son la "corteza" (conocimiento general) y la memoria de la sesión es el "hipocampo" (tamaño fijo, organizado por regiones temáticas).
+Memoria de **tamaño fijo** inspirada en la mente humana: los pesos del modelo son la "corteza" (conocimiento general, no cambia) y cada sesión tiene un "hipocampo" (tamaño fijo, organizado por regiones temáticas). Con `--nai-memoria`, **la conversación ya no se acumula en el KV cache**: el contexto de cada petición lleva solo el mensaje actual, el turno anterior y los recuerdos relevantes reconstruidos para esa pregunta. El número de tokens deja de ser el límite: una conversación de meses ocupa siempre el mismo espacio.
 
-**Codificación exacta guiada por el modelo.** Un texto se guarda como el resultado de codificación aritmética (rANS de 64 bits, frecuencias de 24 bits) usando las probabilidades del propio modelo. Por el teorema de Shannon, el tamaño se acerca a:
+**Flujo en el servidor**
 
-$$\text{bits}(x_{1..n}) \approx \sum_{i=1}^{n} -\log_2 p(x_i \mid x_{\lt i}) = \ln|V| \cdot \log_2 e \cdot \sum_i I_i$$
+```
+petición {nai_session, messages:[...]}            ← el cliente puede mandar solo el mensaje nuevo
+   │ 1. claves de la pregunta → recuerdos de la sesión y de la biblioteca (GPS)
+   │    sin coincidencias → el modelo clasifica la pregunta y se va a su región
+   │ 2. reconstruir con el modelo los recuerdos elegidos (máx. 2 por región: cruza temas)
+   │ 3. mensajes = sistema + recuerdos · turno anterior · mensaje actual
+   ▼
+modelo responde (KV pequeño, se libera al terminar)
+   │ 4. en segundo plano: clasificar el turno, codificar usuario y asistente,
+   │    ajustar al presupuesto (bajar de nivel lo menos importante), guardar DIR/nai-<hash>.mem
+```
 
-Es decir, **el costo de recordar un texto es exactamente su masa semántica total**: lo predecible casi no ocupa, lo sorprendente sí. Para reconstruir, el decodificador vuelve a recorrer el mismo camino con el mismo modelo y obtiene el texto idéntico. Requisito: el mismo modelo y el mismo backend determinista al codificar y decodificar.
+**Codificación exacta guiada por el modelo.** Cada recuerdo se guarda como el resultado de codificación aritmética (rANS de 64 bits, frecuencias de 24 bits) con las probabilidades del propio modelo, condicionadas por un prefijo gratuito que no se guarda ("Tema: física. Usuario:"). Por el teorema de Shannon, el tamaño se acerca a:
 
-**Niveles ("olvidar sin borrar"):**
+$$\text{bits}(x_{1..n}) \approx \sum_{i=1}^{n} -\log_2 p(x_i \mid x_{\lt i}, \text{tema}) = \ln|V| \cdot \log_2 e \cdot \sum_i I_i$$
 
-| Nivel | Qué guarda | Qué permite |
+Es decir, **el costo de recordar un texto es exactamente su masa semántica total**: lo predecible casi no ocupa, lo sorprendente sí. Para reconstruir, el decodificador recorre el mismo camino con el mismo modelo y obtiene el texto idéntico; una suma de verificación de 8 bits detecta si el modelo o el backend cambiaron (el recuerdo se marca "dañado" y conserva sus claves).
+
+**Niveles ("olvidar sin borrar"):** cada nivel cuesta menos que el anterior.
+
+| Nivel | Qué guarda | Cómo se obtiene |
 |---|---|---|
-| EXACTO | El código aritmético completo | Reconstruir el texto idéntico |
-| FRAGMENTO | Solo los tokens más sorprendentes (35 %) | Que el modelo rellene el sentido |
-| PISTA | Las 3 palabras de mayor sorpresa | Volver a llegar al recuerdo |
+| EXACTO | El texto codificado con el modelo | Reconstrucción idéntica |
+| IDEA | Una frase de ≤ 12 palabras con la idea esencial, codificada igual | La escribe el modelo al bajar de nivel (conserva nombres, cifras y fechas) |
+| PISTA | Las 3 palabras más sorprendentes, codificadas | Las elige la sorpresa medida por el modelo |
+| (olvidado) | Nada | Solo cuando todo está en pista y aun así no cabe |
+
+**Claves (el GPS).** Cada recuerdo lleva 4 claves (6 en documentos): hash de 16 bits de sus palabras más sorprendentes, normalizadas (minúsculas, sin acentos, raíz de 6 letras, sin palabras de relleno). Encontrar un recuerdo no requiere reconstruirlo. Puntaje de un candidato: $10 \cdot \text{coincidencias} + \text{importancia}$; si hay candidatos con varias coincidencias, se descartan los de una sola (posible colisión del hash).
 
 **Importancia y presupuesto.**
 
-$$\text{importancia} = w_{\text{región}} \cdot (1 + 0.5 \cdot \text{usos}) + \frac{\text{densidad}}{100}$$
+$$\text{importancia} = w_{\text{región}} \cdot (1 + 0.5 \cdot \text{usos}) + \frac{1}{1 + \text{días sin usarse}}$$
 
-con $w = 3$ para las 19 regiones prioritarias (conciencia, ética, espiritualidad, empatía, lógica, filosofía, psique, biología, física, matemáticas, ciberseguridad, supervivencia, ingeniería, mecánica, aerodinámica, química, medicina tradicional, agricultura, arte) y $w = 1$ para las generales (finanzas personales, cocina, compras, deportes, trámites, entretenimiento). Cuando la memoria (`--memoria BYTES`) se llena, el recuerdo menos importante baja un nivel. Un concepto (`-c "lápiz"`) refuerza los recuerdos relacionados de regiones distintas y el modelo los cruza para proponer ideas nuevas.
+con $w = 3$ para las 19 regiones prioritarias (conciencia, ética, espiritualidad, empatía, lógica, filosofía, psique, biología, física, matemáticas, ciberseguridad, supervivencia, ingeniería, mecánica, aerodinámica, química, medicina tradicional, agricultura, arte) y $w = 1$ para las generales (finanzas personales, cocina, compras, deportes, trámites, entretenimiento, general). Cada vez que un recuerdo se usa, sus `usos` suben y su día se renueva (reasignación por importancia). Mientras la memoria ocupe más que su presupuesto, el recuerdo menos importante baja un nivel.
 
-**Clasificación:** embeddings promediados del modelo, centrados (se resta la media de todas las semillas) y comparados por coseno con la semilla de cada región. Las regiones se pueden editar con `-r regiones.txt` (líneas `peso|tema|semilla`) y los recuerdos con `-f recuerdos.txt`.
+**Costo por recuerdo:** 7 B de encabezado (región, nivel y rol, usos, verificación, día, número de claves) + 2 B por clave + 2 B + el código. Con Qwen2.5-3B, el código de una oración ocupó ~20 B en la medición de v2.
+
+**Clasificación:** el propio modelo elige la región con una gramática que solo permite nombres de región válidos (nunca inventa un tema). Las regiones se cambian con `--nai-regiones archivo` (líneas `peso|tema|semilla`, máximo 32). Cambiar el modelo o las regiones invalida los archivos de memoria (la huella no coincide y se empieza de cero).
+
+**Biblioteca compartida y lectura de documentos (`common/nai-lector.cpp`).** `POST /nai/aprender` agrega documentos a una biblioteca común (`DIR/biblioteca.mem`, sin caducidad, tamaño `--nai-biblioteca-bytes`). El texto se parte en trozos de ≤ 600 caracteres respetando párrafos y oraciones, y cada trozo se clasifica y codifica en segundo plano.
+
+| Entrada | Cómo se lee |
+|---|---|
+| `{"texto": "..."}` | Directo |
+| `{"url": "https://..."}` | Descarga (máx. 16 MiB, 5 redirecciones); en páginas HTML se toma el contenido principal y se quitan menús y pies. Rechaza localhost, redes privadas, enlace local y metadatos de nube salvo `--nai-lector-red-local`; la IP validada se fija para la conexión |
+| `{"archivo": "<base64>", "nombre": "x.pdf"}` | Por extensión: txt, md, csv, json, código → directo (Latin-1 se convierte a UTF-8); html → sin etiquetas, scripts ni estilos; pdf → `pdftotext`; docx, doc, rtf, odt, pages → `textutil` (macOS) o `pandoc` |
+
+`GET /nai/memoria` muestra el estado de la biblioteca (recuerdos por nivel, bytes, trozos pendientes).
+
+**Herramienta de medición:** `nai_memoria -m modelo.gguf` mide precisión de clasificación, reconstrucción exacta, olvido con memoria fija, consultas y cruce de regiones; con `--aprender archivo|URL` prueba la lectura de documentos.
 
 ### 5.10 Triaje (`--nai-triaje`, `common/TriageWrapper.h`)
 
@@ -394,6 +476,80 @@ python3 tools/nai/sim/nai_planificador_sim.py --salida informe/
 
 ---
 
+### 5.12 Reentrenamiento por currículo (`tools/nai/nai_reentrenar.py`)
+
+La memoria recuerda sin tocar el modelo. El reentrenamiento da el paso siguiente: lo aprendido en la **biblioteca** (documentos; nunca conversaciones de usuarios) se consolida en los pesos mediante un adaptador LoRA, como el cerebro pasa recuerdos del hipocampo a la corteza. El modelo base no cambia: el adaptador se carga encima con `--lora`.
+
+**LoRA.** Para cada proyección $W \in \mathbb{R}^{d_{out} \times d_{in}}$ (q, k, v, o, gate, up, down) se entrena una corrección de rango bajo:
+
+$$W' = W + \frac{\alpha}{r} B A, \qquad A \in \mathbb{R}^{r \times d_{in}},\ B \in \mathbb{R}^{d_{out} \times r},\ r \ll d$$
+
+Con $r = 8$ en las últimas 16 capas de Qwen2.5-0.5B se entrenan ≈ 2.9 M de parámetros (≈ 0.6 %); con el modelo en 4 bits (QLoRA) debería caber en 8 GB, pendiente de medir en el iMac M1.
+
+**Currículo: los temas prioritarios primero.**
+
+| Fase | Datos | Épocas |
+|---|---|---|
+| 1. Fundamentos | La **carta de prioridades** ([docs/CARTA_PRIORIDADES.md](docs/CARTA_PRIORIDADES.md): qué es cada tema, por qué importa, cómo se relaciona) + todo lo aprendido de las 19 regiones de peso 3 | 3 (= el peso de los prioritarios) |
+| 2. Generales + repaso | Temas de peso 1 + una fracción $\rho$ de ejemplos prioritarios | 1 |
+
+El repaso evita el **olvido catastrófico** (lo último que se entrena borra lo primero). Con $n_g$ ejemplos generales se agregan $n_r = \frac{\rho}{1-\rho}\, n_g$ ejemplos prioritarios, de modo que $\rho$ (35 % por defecto) del lote de la fase 2 sea repaso.
+
+**Ejemplos de entrenamiento** (de cada recuerdo de la biblioteca, reconstruido con `nai_memoria --exportar`):
+
+| Tipo | Pregunta → respuesta | Para qué |
+|---|---|---|
+| Literal | "Tema: X. ¿Qué sabes sobre …?" → el texto completo | Consolidar el contenido |
+| Pregunta anclada | Preguntas que el modelo base escribe sobre el texto, **filtradas**: al menos 60 % de las palabras de la respuesta deben estar en la fuente | Saber usar el contenido sin inventar |
+| Clasificación | "¿A qué tema pertenece este texto?" → región | El modelo aprende las regiones (mejora la memoria NAI) |
+| Carta | "¿Qué es / por qué importa / con qué se relaciona X?" → la carta | Entender la importancia de cada tema |
+
+**Medición y rechazo.** Antes de convertir, se mide la pérdida media por token en las respuestas, $\bar\ell = -\frac{1}{N}\sum \ln p(y_t \mid y_{\lt t}, x)$, con el modelo base y con el adaptador:
+
+- **por tema**, en ejemplos apartados del entrenamiento (≈ 10 % por región);
+- **control de olvido**: respuestas que el **modelo base** dio a preguntas generales. Si el adaptador las encuentra mucho menos probables, el modelo cambió más allá de lo que se le enseñó.
+
+El adaptador se **rechaza** si algún tema empeora más de 2 %, si la pérdida total no mejora o si el control deriva más de 5 % (`--tolerancia`, `--tolerancia-control`).
+
+**Conversión MLX → GGUF.** MLX calcula $y = Wx + s\,(x A_m) B_m$ con $A_m \in \mathbb{R}^{d_{in} \times r}$ y $B_m \in \mathbb{R}^{r \times d_{out}}$; PEFT/llama.cpp usan $y = Wx + \frac{\alpha}{r} B A x$. Entonces:
+
+$$A = A_m^{\top}, \qquad B = B_m^{\top}, \qquad \alpha = s \cdot r$$
+
+El script escribe el adaptador PEFT y llama a `convert_lora_to_gguf.py`. Verificado: con el mismo adaptador, llama.cpp y MLX dan el mismo top-5 del siguiente token con una diferencia máxima de 0.002 en log-probabilidad.
+
+**Compatibilidad con la memoria.** La memoria comprimida depende de las probabilidades exactas del modelo **base**. El servidor usa para la memoria un contexto propio sin adaptador, así que `--lora` no daña los recuerdos (verificado: 0 dañados con el adaptador cargado). No reemplaces el `.gguf` base por un modelo fusionado.
+
+**Fuentes: búsquedas en la red.** El modelo aprende de lo que encuentra buscando en la red, no de enciclopedias colaborativas (decisión del autor). `docs/nai-fuentes.txt` trae 57 consultas, tres por cada tema prioritario (`region|buscar:consulta`), y también acepta URLs y archivos locales. `nai_reentrenar.py fuentes` busca cada consulta, filtra los resultados y carga las mejores páginas con `POST /nai/aprender` indicando su región, así que no depende del clasificador.
+
+| Filtro | Regla |
+|---|---|
+| Buscador | **SearxNG** propio (metabuscador de código abierto: consulta varios buscadores, sin clave y sin rastreo) o **Brave Search API** (clave gratuita). No se extraen resultados directamente de las páginas de Google o DuckDuckGo: va contra sus términos y se rompe |
+| Sitios bloqueados | Redes sociales y video, tiendas, sitios de tareas o documentos subidos por usuarios (derechos de autor dudosos), Wikipedia y sus copias. `--bloqueados` agrega dominios; `--permitidos` usa una lista blanca |
+| Diversidad | Máximo 2 páginas del mismo sitio por tema y sin URLs repetidas |
+| `robots.txt` | Se respeta lo que cada sitio permite a los robots |
+| Contenido útil | Se prefiere `<article>` o `<main>`; se quitan menús, encabezados, pies, formularios y líneas de menos de 6 palabras; se descartan las páginas con menos de 800 caracteres útiles (`min_caracteres` en `/nai/aprender`) |
+| Trazabilidad | Cada página (aprendida, bloqueada o con error) queda en `nai-reentreno/fuentes-usadas.tsv` |
+
+La red mezcla fuentes buenas y malas, y los filtros no distinguen una afirmación falsa de una verdadera. Para temas donde un error puede dañar (medicina tradicional, supervivencia, ciberseguridad), revisa el registro o usa `--permitidos` con sitios confiables (universidades, organismos de salud, manuales oficiales). El modelo no puede aprender de sí mismo lo que no sabe: la calidad del reentrenamiento depende de la de sus fuentes.
+
+### 5.13 Cifrado de sesiones y memorias (`--nai-cifrado`, `common/nai-cifrado.h`)
+
+**ChaCha20-Poly1305** (RFC 8439): cifrado autenticado. ChaCha20 genera un flujo pseudoaleatorio a partir de la clave de 256 bits, un nonce aleatorio de 96 bits y un contador; Poly1305 calcula una etiqueta de 128 bits sobre los datos asociados y el texto cifrado:
+
+$$c = m \oplus \text{ChaCha20}(k, n, 1), \qquad t = \text{Poly1305}_{(r,s)}\big(\text{aad} \,\|\, c \,\|\, \text{largos}\big), \qquad (r,s) = \text{ChaCha20}(k, n, 0)_{[0..32)}$$
+
+Formato de archivo: `"NAIC" | versión | nonce (12) | c | t (16)`. Los datos asociados incluyen el **nombre del archivo**: un archivo copiado con el nombre de otra sesión, alterado en un solo bit o abierto con otra clave no se descifra (verificado en el servidor), y la sesión simplemente se reprocesa.
+
+| Archivo | Contenido cifrado |
+|---|---|
+| `nai-<hash>.bin` | `"NKV1"` · número de tokens · tokens · estado del KV de la secuencia |
+| `nai-<hash>.mem`, `biblioteca.mem` | La memoria completa, incluida la memoria de trabajo (el último turno literal) |
+
+- **La clave** se crea la primera vez (64 caracteres hex, permisos 0600). El servidor avisa si está dentro de la carpeta de sesiones: si se copian juntas, el cifrado no protege nada.
+- **Sin la clave no hay recuperación.** Un servidor iniciado sin `--nai-cifrado` sobre la misma carpeta no puede leer las sesiones cifradas y guarda las nuevas sin cifrar: usa siempre el mismo flag.
+- **Implementación propia y portable** (sin OpenSSL), verificada contra el vector oficial del RFC 8439 §2.8.2 en `test-nai` y contra la biblioteca `cryptography` de Python en 300 casos aleatorios.
+- `nai_memoria --clave` y `nai_reentrenar.py --clave` leen bibliotecas cifradas.
+
 ## 6. Resultados medidos
 
 Todas las cifras son de mediciones reales; el detalle y el método están en [BENCHMARKS.md](BENCHMARKS.md).
@@ -409,6 +565,10 @@ Todas las cifras son de mediciones reales; el detalle y el método están en [BE
 | Auto-especulación | iMac M1 | Más lenta: verificar 8 tokens cuesta 2–3.4 pasos |
 | Memoria reconstructiva | Qwen2.5-3B, M1 | 28/28 recuerdos reconstruidos exactos en 556 B: 46 213× menos que su KV cache y 4.6× menos que el texto |
 | Desalojo selectivo, prueba de aguja | modelo aleatorio y 0.5B | El dato inicial sobrevive; descarta desde la posición 65 en lugar de la 1 |
+| Memoria v3 en el servidor | modelo de prueba, vocabulario Qwen | El cliente manda 1 mensaje y el modelo recibe 4 (sistema con recuerdos, turno anterior, pregunta); 28/28 recuerdos exactos; sobrevive al reinicio |
+| Conversión del adaptador MLX → GGUF | modelo de prueba | Mismo top-5 del siguiente token que MLX; diferencia máxima 0.002 en log-probabilidad |
+| Control de olvido del reentrenamiento | modelo de prueba, tasa de aprendizaje exagerada | Temas entrenados −32 % de pérdida, control +293 % → adaptador **rechazado**, como debe ser |
+| ChaCha20-Poly1305 | x86 | Coincide con el RFC 8439 y con la biblioteca `cryptography` en 300 casos; archivos alterados, intercambiados o sin clave se rechazan |
 
 Las cifras de versiones anteriores de este README (60 % de ahorro de GPU, 40 % de tokens por la autopista) no se habían comparado contra vanilla ni contra la calidad y se retiraron.
 
@@ -486,6 +646,8 @@ petición HTTP ──► server-context.cpp
 | `common/sampling.cpp/.h` | Autopista de muestreo |
 | `common/arg.cpp`, `common/common.h` | Flags `--nai-*` y sus campos en `common_params` |
 | `common/TriageWrapper.h` | Triaje de prompts |
+| `common/nai-memoria.h/.cpp` | Memoria reconstructiva: códec rANS guiado por el modelo, niveles, claves, presupuesto, archivo `.mem` y servicio con hilo de trabajo |
+| `common/nai-lector.h/.cpp` | Lectura de URLs (con protección de red interna), HTML, PDF, Word y texto |
 | `tools/server/server-context.cpp` | Desalojo, gravedad, sesiones y traza en el servidor |
 | `tools/server/server-task.h`, `server-queue.cpp` | Campo `nai_session` de la petición |
 | `tools/cli/cli-context.cpp/.h` | Triaje y autopista en el CLI |
@@ -494,9 +656,13 @@ petición HTTP ──► server-context.cpp
 | `tools/nai/sim/nai_planificador_sim.py` | Simulador del planificador |
 | `tests/test-nai.cpp` | Pruebas unitarias sin modelo |
 | `tests/nai-manual/nai_medir_capas.cpp` | Lente por capa y regla Δh > τ |
-| `tests/nai-manual/nai_memoria.cpp` | Memoria reconstructiva por regiones |
+| `tests/nai-manual/nai_memoria.cpp` | Medición de la memoria reconstructiva (clasificación, exactitud, olvido, consultas, cruce, documentos) |
 | `tests/nai-manual/crear_modelo_prueba.py` | Modelo aleatorio para pruebas |
 | `docs/PLANIFICADOR.md`, `docs/nai-sim/` | Especificación y resultados del planificador |
+| `common/nai-cifrado.h` | ChaCha20-Poly1305 (RFC 8439), formato de archivo cifrado y manejo de la clave |
+| `tools/nai/nai_reentrenar.py` | Reentrenamiento por currículo: fuentes, exportar, datos, entrenar (MLX), medir, convertir |
+| `docs/CARTA_PRIORIDADES.md` | Carta de prioridades (borrador del autor): qué es cada tema prioritario, por qué importa y cómo se relaciona |
+| `docs/nai-fuentes.txt` | Consultas de búsqueda por tema (y URLs o archivos) para la biblioteca |
 | `VISION.md` | Marco teórico original y estado de cada fórmula |
 | `BENCHMARKS.md` | Método y resultados de las mediciones |
 
@@ -567,9 +733,10 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 ### 9.5 Ideas de mejora abiertas
 
 - **Masa con $\|W_K x\|_2$** (§5.1): leer la norma de la K guardada en el caché (RoPE conserva la norma) y combinarla con la sorpresa.
-- **Cifrado de sesiones:** AES-GCM o ChaCha20-Poly1305 con la clave derivada de `.nai-clave`.
 - **Planificador en el servidor:** implementar lo validado en `docs/PLANIFICADOR.md`, empezando por la admisión (Schwarzschild) y la hibernación reutilizando el código de sesiones.
-- **Memoria reconstructiva v3:** clasificación por el propio modelo, fragmentos y pistas también codificados por el modelo (cada nivel más barato que el anterior) y relevancia juzgada por el modelo al cruzar recuerdos.
+- **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo; corrige los HTTP 500 del parser de chat.
+- **Recargar el adaptador sin reiniciar:** un endpoint que cargue un `.gguf` LoRA nuevo en caliente; hoy se reinicia el servidor con `--lora`.
+- **Búsqueda por significado:** complementar las claves (que no entienden sinónimos) con una firma semántica compacta por recuerdo.
 - **Salida temprana real:** solo con modelos entrenados para ello (LayerSkip) y en hardware donde verificar un lote cueste ≈ 1 paso.
 
 ---
@@ -597,10 +764,12 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 2. **Gravedad:** experimental, cambia la salida; no aplica a ALiBi, M-RoPE, ni modelos recurrentes o híbridos. Su costo es lineal en la longitud del contexto.
 3. **Autopista:** se desactiva sola con gramáticas, JSON schema, `logit_bias` o penalizaciones.
 4. **Borrador de auto-especulación:** duplica ≈ $K/L$ de los pesos en memoria y fue más lento en M1.
-5. **Sesiones:** sin cifrado; no cubren multimodal ni especulación.
+5. **Sesiones:** no cubren multimodal ni especulación. El cifrado es opcional (`--nai-cifrado`).
 6. **Base del fork:** anterior al llama.cpp oficial actual (parser de chat con errores en UTF-8 inválido).
-7. **Memoria reconstructiva:** prototipo en `tests/nai-manual/`, no integrado al servidor; la clasificación por embeddings y las pistas son débiles en modelos pequeños.
-8. **Planificador:** solo en simulación.
+7. **Memoria reconstructiva:** cada recuerdo nuevo cuesta un paso del modelo por token (clasificar y codificar); en un M1 con 0.5B, un documento de 10 páginas tarda alrededor de un minuto en aprenderse. Los archivos `.mem` solo sirven con el mismo modelo, las mismas regiones y el mismo backend. La búsqueda por claves no entiende sinónimos ("dinero" no encuentra "ahorro"); el respaldo es la región. Calidad de clasificación, ideas y pistas pendiente de medir con Qwen real (`nai_memoria`).
+8. **Planificador:** solo en simulación; falta implementarlo en el servidor.
+9. **Reentrenamiento:** necesita Apple Silicon (MLX) para entrenar; en Linux/CUDA habría que cambiar el paso `entrenar` por PEFT. La calidad depende de las fuentes: con fuentes pobres o generales, el adaptador aprende poco. Probado de punta a punta solo con un modelo de prueba; la medición con Qwen real está pendiente.
+10. **Masa semántica sin $\|W_K x\|_2$:** el factor de la fórmula original del autor sigue pendiente (§5.1).
 
 ---
 
@@ -627,14 +796,14 @@ La arquitectura NAI sirve donde importa **cuánto cuesta cada token** (memoria, 
 
 | Caso | Problema | Qué aporta NAI | Funciones | Estado |
 |---|---|---|---|---|
-| **Asistente financiero con historial** (p. ej. AmigoCash) | El usuario vuelve horas después y el asistente olvidó la conversación o tarda en reprocesarla | La conversación se retoma en fracciones de segundo durante 24 h y se borra sola después; al llenarse el contexto se conservan las instrucciones y los datos clave, no el relleno | Sesiones, desalojo selectivo | Disponible (cifrado pendiente: usar disco cifrado) |
+| **Asistente financiero con historial** (p. ej. AmigoCash) | El usuario vuelve horas después y el asistente olvidó la conversación o tarda en reprocesarla | La conversación se retoma en fracciones de segundo durante 24 h y se borra sola después; al llenarse el contexto se conservan las instrucciones y los datos clave, no el relleno | Sesiones, desalojo selectivo, memoria, cifrado | Disponible |
 | **IA local en equipos modestos** (8 GB, laptops, mini PC) | Contextos largos que no caben en memoria | El software se adapta al equipo: la memoria se libera según la masa de cada token, sin depender de una arquitectura de hardware | Desalojo, gravedad, mapa de masa | Disponible; gravedad experimental |
 | **Servidor multiusuario / atención al cliente** | Con memoria compartida llena, llama.cpp falla peticiones o trunca conversaciones | Admitir solo la masa que cabe, priorizar lo que termina rápido e hibernar a disco en vez de fallar | Planificador entrelazado, sesiones | Validado en simulación (100 % de peticiones íntegras) |
 | **Agentes autónomos y asistentes de código** | Tareas largas donde las reglas del sistema se pierden entre ruido | El prompt de sistema y las instrucciones tienen masa protegida; el relleno predecible es lo primero en salir | Desalojo, gravedad, triaje | Disponible |
 | **Peticiones ambiguas** | Se gasta cómputo generando respuestas a preguntas mal planteadas | Pedir aclaración o proponer una hipótesis antes de generar | Triaje | Disponible (CLI) |
-| **Tutores y educación** | El alumno vuelve a un tema días después | Memoria por regiones (matemáticas, física, lógica, química...) que recuerda lo importante y reconstruye lo demás desde fragmentos | Memoria reconstructiva | Prototipo |
-| **Conocimiento sin internet** (campo, zonas rurales, emergencias) | Sin conexión y con hardware limitado | Modelo local con memoria prioritaria en supervivencia, agricultura, medicina tradicional, ingeniería y mecánica | Memoria reconstructiva, sesiones | Prototipo |
-| **Creatividad e investigación** | Encontrar relaciones entre ideas lejanas | Cruzar fragmentos de regiones distintas a partir de un concepto (el ejemplo del lápiz: artista, poema, dibujo, manifiesto, matemático) | Memoria reconstructiva (`-c concepto`) | Prototipo |
+| **Tutores y educación** | El alumno vuelve a un tema días después | Memoria por regiones (matemáticas, física, lógica, química...) que recuerda lo importante y reconstruye lo demás desde fragmentos | Memoria reconstructiva | Disponible (`--nai-memoria`) |
+| **Conocimiento sin internet** (campo, zonas rurales, emergencias) | Sin conexión y con hardware limitado | Modelo local con memoria prioritaria en supervivencia, agricultura, medicina tradicional, ingeniería y mecánica | Memoria reconstructiva, sesiones | Disponible (`--nai-memoria`) |
+| **Creatividad e investigación** | Encontrar relaciones entre ideas lejanas | Cruzar fragmentos de regiones distintas a partir de un concepto (el ejemplo del lápiz: artista, poema, dibujo, manifiesto, matemático) | Memoria reconstructiva (`-c concepto` en `nai_memoria`) | Prototipo |
 | **Privacidad y ciberseguridad** | Conversaciones sensibles que no deben salir del equipo ni ser adivinables | Inferencia local; ids de sesión secretos con hash con clave (SipHash-2-4), permisos 0600, logs sin ids | Sesiones | Disponible |
 | **Generador de API de alto rendimiento** | Integrar inferencia en un backend de microservicios | `bloque_id` reservado para enlazar NAI con el proyecto padre | Telemetría, sesiones | Reservado |
 | **Medición y docencia de LLMs** | Entender en qué capa "decide" un modelo | Lente por capa, regla Δh > τ y perplejidad por capa omitida | `nai_medir_capas` | Disponible |
@@ -671,7 +840,7 @@ Esta sección reúne **lo que el autor definió** y cómo llegó al código. Cua
 | 9 | **Métrica de Schwarzschild** | $ds^2$ con $1 - 2GM/(rc^2)$ | Horizonte de admisión: solo entra la masa que cabe en la memoria libre comprometida | §5.11 (simulación) |
 | 10 | **Ecuación de Friedmann** | $(\dot a/a)^2 = \tfrac{8\pi G}{3}\rho - k/a^2 + \Lambda$ | Anticipar el colapso de memoria; probada y apagada (no aportó en los escenarios simulados) | §5.11 |
 | 11 | **Ecuación Maestra unificada** | $\mathcal R_{\mu\nu} - \tfrac12 g_{\mu\nu}\mathcal R + \Lambda g_{\mu\nu} = \tfrac{8\pi G}{c^4}(\hat T - \gamma\, \partial_t \Delta h + \hat S)$ | "Estire y afloja": la masa estimada se corrige con la masa real observada | §5.11 (simulación) |
-| 12 | **Importancia de un recuerdo** | Memoria fija; lo importante se asigna y reasigna; las regiones prioritarias almacenan más | $w_{\text{región}}(1 + 0.5\,\text{usos}) + \text{densidad}/100$, con $w = 3$ prioritarias y $w = 1$ generales | §5.9 |
+| 12 | **Importancia de un recuerdo** | Memoria fija; lo importante se asigna y reasigna; las regiones prioritarias almacenan más | $w_{\text{región}}(1 + 0.5\,\text{usos}) + 1/(1 + \text{días sin usarse})$, con $w = 3$ prioritarias y $w = 1$ generales | §5.9 |
 
 ### 14.2 Lógica
 
@@ -694,10 +863,15 @@ Esta sección reúne **lo que el autor definió** y cómo llegó al código. Cua
 | 6 | No gastar cómputo en una petición ambigua | Triaje: aclarar o proponer hipótesis | `--nai-triaje` |
 | 7 | Toda optimización debe poder apagarse y compararse | Todo apagado por defecto; banco de pruebas contra vanilla y oficial | flags `--nai-*` |
 | 8 | Prioridad de almacenamiento para 19 temas: conciencia, ética, espiritualidad, empatía, lógica, filosofía, psique, biología, física, matemáticas, ciberseguridad, supervivencia, ingeniería, mecánica, aerodinámica, química, medicina tradicional, agricultura, arte | Peso 3 frente a 1 de los temas generales | `-r regiones.txt` |
-| 9 | La memoria tiene un tamaño fijo; al llenarse, lo menos importante baja de nivel (exacto → fragmento → pista) en vez de borrarse | Presupuesto de memoria reconstructiva | `--memoria BYTES` |
+| 9 | La memoria tiene un tamaño fijo; al llenarse, lo menos importante baja de nivel (exacto → idea → pista) en vez de borrarse | Presupuesto de memoria reconstructiva | `--nai-memoria-bytes N` |
 | 10 | Un concepto debe poder activar recuerdos de regiones distintas para crear ideas | Refuerzo por concepto y cruce | `-c concepto` |
 | 11 | NAI debe poder conectarse a un proyecto padre (generador de API) | Campo `bloque_id` reservado | — |
 | 12 | No limitar el motor a una arquitectura de hardware | Funciones sobre logits y máscara, comunes a todos los backends | `-t`, `-ngl` |
+| 13 | El modelo aprende **primero los temas prioritarios** y entiende por qué importa cada uno | Currículo: fase 1 con la carta de prioridades y las regiones de peso 3 (3 épocas), fase 2 con los generales y 35 % de repaso | `nai_reentrenar.py` |
+| 14 | Solo se consolida en el modelo lo aprendido de documentos, nunca las conversaciones de los usuarios | El reentrenamiento lee únicamente `biblioteca.mem` | — |
+| 15 | Un adaptador que hace olvidar o empeora algún tema no se usa | Medición por tema y control de olvido antes de convertir | `--tolerancia` |
+| 16 | Las conversaciones guardadas en disco no deben poder leerse ni alterarse sin la clave | ChaCha20-Poly1305 con el nombre del archivo como dato asociado | `--nai-cifrado` |
+| 17 | El modelo aprende de **búsquedas en la red**, no de Wikipedia, respetando a cada sitio | Buscador (SearxNG o Brave), sitios bloqueados, máx. 2 por sitio, `robots.txt`, contenido útil mínimo y registro auditable | `nai_reentrenar.py fuentes` |
 
 ---
 

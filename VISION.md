@@ -15,7 +15,7 @@
 
 | Fórmula (sección original) | Estado | Dónde / por qué |
 |---|---|---|
-| Inercia latente Δh = 1 − H(σ(z⁽ᵏ⁾)) / log₂\|V\| (5.A) | **Implementada como medición** | `tests/nai-manual/nai_medir_capas` evalúa la regla "salir si Δh > τ". La salida temprana se aplica sin pérdida con auto-especulación (`tools/nai/nai_borrador_capas.py`). |
+| Inercia latente Δh = 1 − H(σ(z⁽ᵏ⁾)) / log₂\|V\| (5.A; el código usa H en nats y ln\|V\|, mismo resultado) | **Implementada como medición** | `tests/nai-manual/nai_medir_capas` evalúa la regla "salir si Δh > τ". La salida temprana se aplica sin pérdida con auto-especulación (`tools/nai/nai_borrador_capas.py`). |
 | Masa semántica I = ‖W_K x‖₂ · (1 + H_local) (3.C, 5.B.2) | **Parcial** | H_local se implementa como **sorpresa** del token, −ln p(xᵢ)/ln\|V\| (`src/inercia_latente.hpp`). El factor ‖W_K x‖₂ queda pendiente; RoPE conserva la norma, así que basta con leer la K guardada. |
 | Decaimiento K(t+dt) = K(t)·exp(−γ·dt/(I+ε)) (3.C, 5.B.3) | **Implementada y corregida** | Se aplica al **peso de atención** (sesgo en la máscara KQ, `--nai-gravedad`). Escalar K no apaga un token. |
 | Expansión de Hubble (11.5, nivel token) | **Unificada con la anterior** | Con z ∝ distancia es el mismo término lineal en Δt. |
@@ -80,6 +80,8 @@ $$K_i(t + dt) = K_i(t) \cdot \exp\left(-\frac{\gamma \cdot dt}{I_i + \varepsilon
 En la Capa $k$ (por ejemplo, Capa 12 en Qwen2), el estado latente $h^{(k)}$ se proyecta mediante la cabeza temprana `nai_logits_early`. La inercia latente $\Delta h$ se calcula mediante la entropía espectral normalizada:
 
 $$\Delta h = 1 - \frac{\mathcal{H}(\sigma(z^{(k)}))}{\log_2 |V|}$$
+
+> Nota de implementación: la normalización debe usar la misma base que la entropía. Con $\mathcal{H}$ en bits se divide entre $\log_2|V|$; el código la calcula en nats y divide entre $\ln|V|$. El resultado es idéntico.
 
 Donde $\mathcal{H}$ es la entropía de Shannon de la distribución de probabilidad suavizada por Softmax $\sigma(z^{(k)})$, y $|V|$ es el tamaño del vocabulario.
 
@@ -279,7 +281,7 @@ La arquitectura de física computacional, inercia, campos gravitatorios y menor 
 
 * **2. Optimización de Modelos de Lenguaje y Tensores en Silicio (Motor NAI)**
   * *Descripción y Origen:* Tomando como base la robustez y la física de campos probada originariamente en Aperion Engine, la arquitectura fue destilada, evolucionada y proyectada hacia el dominio de los Modelos de Lenguaje Grande (`llama.cpp`) con el **Motor NAI**.
-  * *Aplicación Práctica:* Mitigación de la saturación entrópica en contextos masivos (por encima de 32k tokens), ahorro de hasta el 60% de ciclos de GPU mediante el *Early Exit* (Capas Respirantes) y persistencia conversacional de 24 horas por usuario.
+  * *Aplicación Práctica:* Mitigación de la saturación entrópica en contextos masivos (por encima de 32k tokens), salida temprana sin pérdida mediante auto-especulación por capas (*Capas Respirantes*; el ahorro depende del hardware y del modelo: en un iMac M1 con Qwen2.5-0.5B resultó más lenta, ver [BENCHMARKS.md](BENCHMARKS.md)) y persistencia conversacional de 24 horas por usuario.
 
 * **3. Plataformas Transaccionales Multi-Tenant de Ultra-Bajo Nivel (Europiel Engine)**
   * *Descripción y Origen:* La consolidación enterprise en .NET 10 y C nativo que hereda la velocidad de los principios del ecosistema, integrando gestión de memoria no administrada (`NativeMemory`, Zero-GC), búferes circulares atómicos en C (`quantum_core.c`) y enrutamiento dinámico multicanal (`MultiBoxEngine`).

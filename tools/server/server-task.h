@@ -53,6 +53,7 @@ struct task_params {
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
 
     std::string nai_session; // [NAI] identificador de sesión persistente (vacío = sin sesión)
+    std::string nai_mem_usuario; // [NAI] mensaje del usuario para guardar en la memoria al terminar
     bool return_tokens   = false;
     bool return_progress = false;
 

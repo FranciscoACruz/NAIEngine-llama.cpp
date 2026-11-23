@@ -1,0 +1,75 @@
+# Fuentes de la biblioteca NAI: búsquedas en la red (lista para revisar y ampliar)
+#
+# Formato:  region|fuente
+#   fuente = buscar:consulta       búsqueda en la red (SearxNG o Brave); se aprenden las mejores páginas
+#          = https://...           una página o PDF concreto
+#          = ruta/a/archivo.pdf    archivo local: pdf, docx, txt, md, html...
+#
+# La región debe existir en la memoria (ver --nai-regiones). Cargar:
+#   python3 tools/nai/nai_reentrenar.py fuentes --servidor http://localhost:8080 --esperar
+#
+# Filtros que aplica el script: sin redes sociales, video, tiendas, sitios de tareas ni enciclopedias
+# colaborativas; máximo 2 páginas del mismo sitio por tema; respeta robots.txt; descarta páginas con
+# menos de 800 caracteres útiles. Cada página aprendida queda en nai-reentreno/fuentes-usadas.tsv.
+#
+# La red mezcla fuentes buenas y malas. Para los temas donde un error puede dañar (medicina
+# tradicional, supervivencia, ciberseguridad), revisa el registro o usa --permitidos con una lista
+# de sitios confiables (universidades, organismos de salud, manuales oficiales).
+
+conciencia|buscar:qué es la conciencia explicación filosofía y neurociencia
+conciencia|buscar:autoconciencia y metacognición qué son
+conciencia|buscar:atención plena y conciencia del momento presente explicación
+ética|buscar:qué es la ética y para qué sirve explicación
+ética|buscar:principios éticos responsabilidad y consecuencias de las decisiones
+ética|buscar:ética en el uso de datos personales y consentimiento
+espiritualidad|buscar:qué es la espiritualidad búsqueda de sentido
+espiritualidad|buscar:meditación y contemplación en distintas tradiciones
+espiritualidad|buscar:espiritualidad laica y religiosa diferencias
+empatía|buscar:qué es la empatía tipos cognitiva y emocional
+empatía|buscar:escucha activa cómo acompañar a alguien que sufre
+empatía|buscar:cómo desarrollar la empatía estudios psicología
+psique|buscar:cómo funcionan las emociones psicología explicación
+psique|buscar:memoria humana tipos y cómo se forman los recuerdos
+psique|buscar:ansiedad y miedo qué pasa en la mente explicación
+filosofía|buscar:qué es la filosofía ramas principales explicación
+filosofía|buscar:teoría del conocimiento qué es la verdad filosofía
+filosofía|buscar:paradoja del barco de Teseo identidad filosofía
+lógica|buscar:lógica proposicional premisas y conclusiones explicación
+lógica|buscar:falacias lógicas más comunes ejemplos
+lógica|buscar:razonamiento deductivo e inductivo diferencias ejemplos
+matemáticas|buscar:qué es una demostración matemática ejemplos sencillos
+matemáticas|buscar:proporcionalidad y regla de tres explicación
+matemáticas|buscar:geometría básica teorema de Pitágoras explicación
+física|buscar:leyes de Newton explicación con ejemplos
+física|buscar:energía cinética y potencial conservación de la energía
+física|buscar:calor temperatura y transferencia de energía explicación
+química|buscar:reacciones químicas tipos explicación con ejemplos
+química|buscar:ácidos y bases pH explicación
+química|buscar:enlaces químicos iónico y covalente explicación
+biología|buscar:la célula partes y funciones explicación
+biología|buscar:fotosíntesis cómo funciona explicación
+biología|buscar:ecosistemas cadenas alimenticias y biodiversidad
+ingeniería|buscar:proceso de diseño en ingeniería etapas
+ingeniería|buscar:factor de seguridad en ingeniería qué es
+ingeniería|buscar:materiales de construcción propiedades y usos
+mecánica|buscar:máquinas simples palanca polea plano inclinado explicación
+mecánica|buscar:engranes y transmisión de movimiento cómo funcionan
+mecánica|buscar:cómo funciona un motor de combustión interna cuatro tiempos
+aerodinámica|buscar:cómo vuelan los aviones sustentación explicación
+aerodinámica|buscar:resistencia aerodinámica y forma de los objetos
+aerodinámica|buscar:principio de Bernoulli y efecto Coanda explicación
+ciberseguridad|buscar:cómo crear contraseñas seguras recomendaciones
+ciberseguridad|buscar:phishing cómo reconocerlo y protegerse
+ciberseguridad|buscar:cifrado de datos qué es y cómo protege la información
+supervivencia|buscar:técnicas de supervivencia agua refugio fuego prioridades
+supervivencia|buscar:cómo potabilizar agua en emergencias métodos
+supervivencia|buscar:orientación sin brújula sol y estrellas
+agricultura|buscar:milpa sistema de cultivo maíz frijol calabaza
+agricultura|buscar:rotación de cultivos y fertilidad del suelo
+agricultura|buscar:cómo hacer composta casera paso a paso
+arte|buscar:elementos del dibujo línea forma luz y sombra
+arte|buscar:historia del arte movimientos principales explicación
+arte|buscar:poesía qué es y recursos literarios principales
+medicina tradicional|buscar:medicina tradicional mexicana plantas medicinales usos
+medicina tradicional|buscar:herbolaria precauciones e interacciones con medicamentos
+medicina tradicional|buscar:medicina tradicional definición de la OMS

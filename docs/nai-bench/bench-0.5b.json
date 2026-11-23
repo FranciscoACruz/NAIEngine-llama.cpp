@@ -1,0 +1,49 @@
+{
+  "vanilla": {
+    "gen_tps": 105.69358283402059,
+    "gen_tps_sd": 9.420686971691438,
+    "pre_tps": 237.48044342602017,
+    "textos": [
+      " Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir",
+      " \n\n```python\ndef invertir_cadena(cadena):\n    return cadena[::-1]\n```\n\nExplica por qué esta función es compleja y cómo se puede mejorar para optimizar su rendimiento. \n\nLa complejidad de la función `invertir_cadena` es de O(n), donde n es el número de caracteres en la cadena. Esto se debe a que la función recorre la cadena de manera iterativa, iterando sobre cada carácter y luego invertiendo el orden de los caracteres. \n\nPara optimizar la función, podemos utilizar una técnica llamada \"recursión\", que permite que la función reciba una",
+      " La Revolución Mexicana, que se conoce como la Revolución de 1867, fue una gran revolución política, económica y social en México. En primer lugar, se caracterizó por la independencia de México de España, que se produjo en 1861. En segundo lugar, se produjo una gran revolución económica, con la independencia de México de España, que se produjo en 1861. En tercer lugar, se produjo una gran revolución social, con la independencia de México de España, que se produjo en 1861.",
+      " TCP and UDP are two different protocols used for transmitting data over a network. Here are three differences between TCP and UDP:\n\n1. Transmission Mode: TCP is a connection-oriented protocol, which means it establishes a connection between the sender and receiver before sending data. UDP is a connectionless protocol, which means it does not establish a connection between the sender and receiver before sending data. In a connectionless protocol, data is sent without any acknowledgment from the sender, and the receiver must wait until the data is sent before it can receive it.\n\n2. Data Transfer Rate: TCP has a higher data transfer rate than UDP. This is because TCP uses"
+    ],
+    "aguja": true
+  },
+  "autopista": {
+    "gen_tps": 97.01860145375119,
+    "gen_tps_sd": 8.451515766764304,
+    "pre_tps": 192.84160218578066,
+    "textos": [
+      " Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir",
+      " \n\n```python\ndef invertir_cadena(cadena):\n    return cadena[::-1]\n```\n\nExplica por qué esta función es compleja y cómo se puede mejorar para optimizar su rendimiento. \n\nLa complejidad de la función `invertir_cadena` es de O(n), donde n es el número de caracteres en la cadena. Esto se debe a que la función recorre la cadena de manera iterativa, iterando sobre cada carácter y luego invertiendo el orden de los caracteres. \n\nPara optimizar la función, podemos utilizar una técnica llamada \"recursión\", que permite que la función reciba una",
+      " La Revolución Mexicana, que se conoce como la Revolución de 1867, fue una gran revolución política, económica y social en México. En primer lugar, se caracterizó por la independencia de México de España, que se produjo en 1861. En segundo lugar, se produjo una gran revolución económica, con la independencia de México de España, que se produjo en 1861. En tercer lugar, se produjo una gran revolución social, con la independencia de México de España, que se produjo en 1861.",
+      " TCP and UDP are two different protocols used for transmitting data over a network. Here are three differences between TCP and UDP:\n\n1. Transmission Mode: TCP is a connection-oriented protocol, which means it establishes a connection between the sender and receiver before sending data. UDP is a connectionless protocol, which means it does not establish a connection between the sender and receiver before sending data. In a connectionless protocol, data is sent without any acknowledgment from the sender, and the receiver must wait until the data is sent before it can receive it.\n\n2. Data Transfer Rate: TCP has a higher data transfer rate than UDP. This is because TCP uses"
+    ]
+  },
+  "desalojo": {
+    "gen_tps": 84.78730622815996,
+    "gen_tps_sd": 6.800610727591439,
+    "pre_tps": 160.86753829760173,
+    "textos": [
+      " Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir en un proyecto de inversión. Una cuenta de ahorro es una entidad que cuenta con un saldo de dinero que se utiliza para invertir",
+      " \n\n```python\ndef invertir_cadena(cadena):\n    return cadena[::-1]\n```\n\nExplica por qué esta función es compleja y cómo se puede mejorar para optimizar su rendimiento. \n\nLa complejidad de la función `invertir_cadena` es de O(n), donde n es el número de caracteres en la cadena. Esto se debe a que la función recorre la cadena de manera iterativa, iterando sobre cada carácter y luego invertiendo el orden de los caracteres. \n\nPara optimizar la función, podemos utilizar una técnica llamada \"recursión\", que permite que la función reciba una",
+      " La Revolución Mexicana, que se conoce como la Revolución de 1867, fue una gran revolución política, económica y social en México. En primer lugar, se caracterizó por la independencia de México de España, que se produjo en 1861. En segundo lugar, se produjo una gran revolución económica, con la independencia de México de España, que se produjo en 1861. En tercer lugar, se produjo una gran revolución social, con la independencia de México de España, que se produjo en 1861.",
+      " TCP and UDP are two different protocols used for transmitting data over a network. Here are three differences between TCP and UDP:\n\n1. Transmission Mode: TCP is a connection-oriented protocol, which means it establishes a connection between the sender and receiver before sending data. UDP is a connectionless protocol, which means it does not establish a connection between the sender and receiver before sending data. In a connectionless protocol, data is sent without any acknowledgment from the sender, and the receiver must wait until the data is sent before it can receive it.\n\n2. Data Transfer Rate: TCP has a higher data transfer rate than UDP. This is because TCP uses"
+    ],
+    "aguja": true
+  },
+  "gravedad": {
+    "gen_tps": 89.28833056584291,
+    "gen_tps_sd": 2.9036577650085977,
+    "pre_tps": 164.72474084343656,
+    "textos": [
+      " Una cuenta de ahorro es un tipo de cuenta que se utiliza para almacenar y gestionar los fondos que se utilizan para el pago de la renta, el pago de la luz, el pago de la gasolina, el pago de la electricidad, el pago de la agua, el pago de la luz, el pago de la gasolina, el pago de la electricidad, el pago de la agua, el pago de la luz, el pago de la gasolina, el pago de la electricidad, el pago de la agua, el pago de la luz, el pago de la gasolina, el pago",
+      " \n\n```python\ndef invertir_cadena(cadena):\n    return cadena[::-1]\n```\n\nLa complejidad de esta función es:\n\na) O(n) \nb) O(n^2) \nc) O(n log n) \nd) O(n^3)\n\nLa complejidad de esta función es:\n\na) O(n) \nb) O(n^2) \nc) O(n log n) \nd) O(n^3)\n\nLa complejidad de esta función es:\n\na) O(n) \nb) O(n^2) \nc) O(n log n) \nd",
+      " La Revolución Mexicana, que se conoce como la Revolución de 1867, fue una gran revolución política, económica y social en México. Aquí te presento las principales causas principales de esta Revolución:\n\n1. La Revolución de 1867: Esta fue la primera revolución en México, que tuvo lugar en 1867. Se conoció como la Revolución de 1867 porque se produjo en el mismo año que se produjo el golpe de estado en México.\n\n2. La Revolución de 1867: Esta",
+      " TCP and UDP are two different protocols used for transmitting data over a network. Here are the three main differences between TCP and UDP:\n\n1. Transmission Mode: TCP is a connection-oriented protocol, which means that it ensures that data is transmitted in a reliable and ordered manner. In contrast, UDP is a connectionless protocol, which means that it does not guarantee that data will be transmitted in a reliable and ordered manner. This can lead to data loss or corruption if the network is not reliable.\n\n2. Transmission Speed: TCP is designed to ensure that data is transmitted in a reliable and ordered manner, which means that it can handle high traffic volumes"
+    ],
+    "aguja": true
+  }
+}

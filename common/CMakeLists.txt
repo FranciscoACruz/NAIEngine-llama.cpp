@@ -84,6 +84,10 @@ add_library(${TARGET}
     llguidance.cpp
     log.cpp
     log.h
+    nai-lector.cpp
+    nai-lector.h
+    nai-memoria.cpp
+    nai-memoria.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp
