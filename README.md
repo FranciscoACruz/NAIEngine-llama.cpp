@@ -451,7 +451,11 @@ con $w = 3$ para las 19 regiones prioritarias (conciencia, ética, espiritualida
 
 **Costo por recuerdo:** 7 B de encabezado (región, nivel y rol, usos, verificación, día, número de claves) + 2 B por clave + 2 B + el código. Con Qwen2.5-3B, el código de una oración ocupó ~20 B en la medición de v2.
 
-**Clasificación:** el propio modelo elige la región con una gramática que solo permite nombres de región válidos (nunca inventa un tema). Las regiones se cambian con `--nai-regiones archivo` (líneas `peso|tema|semilla`, máximo 32). Cambiar el modelo o las regiones invalida los archivos de memoria (la huella no coincide y se empieza de cero).
+**Clasificación (calibrada por probabilidad):** al modelo se le muestran los temas con su descripción (la *semilla*) y el texto, y se mide la probabilidad de que responda el nombre de cada región:
+
+$$\text{región} = \arg\max_r \; \Big[\log p(\text{nombre}_r \mid \text{temas}, \text{texto}) - \log p(\text{nombre}_r \mid \text{temas}, \text{«N/A»})\Big]$$
+
+El segundo término es la calibración (*Calibrate Before Use*, Zhao et al., 2021): resta la preferencia que el modelo tiene por un nombre sin importar el texto, como la de elegir la primera opción de la lista. Nunca inventa un tema, porque solo se comparan regiones existentes. Costo: el KV del encabezado fijo (instrucción y temas, ~600 tokens) se guarda una vez y se restaura con una copia; en cada clasificación solo se evalúan el texto y, en un solo lote, los nombres (cada región es una secuencia que comparte el prompt). Como la región decide el peso del recuerdo en el reentrenamiento (`peso` repeticiones por época), una mala clasificación sesga el currículo: `nai_memoria` imprime la precisión con y sin calibración para comprobarlo con el modelo de cada quien. Las regiones se cambian con `--nai-regiones archivo` (líneas `peso|tema|semilla`, máximo 32). Cambiar el modelo o las regiones invalida los archivos de memoria (la huella no coincide y se empieza de cero).
 
 **Biblioteca compartida y lectura de documentos (`common/nai-lector.cpp`).** `POST /nai/aprender` agrega documentos a una biblioteca común (`DIR/biblioteca.mem`, sin caducidad, tamaño `--nai-biblioteca-bytes`). El texto se parte en trozos de ≤ 600 caracteres respetando párrafos y oraciones, y cada trozo se clasifica y codifica en segundo plano.
 
