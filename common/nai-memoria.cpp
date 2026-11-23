@@ -353,7 +353,8 @@ motor::motor(llama_model * m, int n_threads, std::vector<region> rs) : model(m),
     cp.n_ctx           = N_CTX_MOTOR;
     cp.n_batch         = N_CTX_MOTOR;
     cp.n_ubatch        = 512;
-    cp.n_seq_max       = 1;
+    cp.n_seq_max       = (uint32_t) regs.size() + 1;   // seq 0 = trabajo; 1..N = una por región al clasificar
+    cp.kv_unified      = true;                         // las regiones comparten las celdas del prompt
     cp.n_threads       = std::max(1, n_threads);
     cp.n_threads_batch = std::max(1, n_threads);
     cp.no_perf         = true;
@@ -381,13 +382,17 @@ std::vector<llama_token> motor::tokenizar(const std::string & s, bool especiales
     return t;
 }
 
+// Inverso exacto de tokenizar: llama_detokenize quita el espacio que SentencePiece antepone
+// (add_space_prefix), así el texto reconstruido es idéntico al original en cualquier tokenizador.
 std::string motor::detokenizar(const std::vector<llama_token> & toks) const {
-    std::string s;
-    char buf[256];
-    for (auto t : toks) {
-        const int n = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, false);
-        if (n > 0) s.append(buf, n);
+    if (toks.empty()) return "";
+    std::string s(toks.size() * 8 + 16, '\0');
+    int n = llama_detokenize(vocab, toks.data(), (int32_t) toks.size(), s.data(), (int32_t) s.size(), false, false);
+    if (n < 0) {
+        s.resize(-n);
+        n = llama_detokenize(vocab, toks.data(), (int32_t) toks.size(), s.data(), (int32_t) s.size(), false, false);
     }
+    s.resize(std::max(0, n));
     return s;
 }
 
@@ -471,7 +476,7 @@ bool motor::codificar(const std::string & pre, const std::string & texto, codigo
         return out.palabras.size() <= 255;
     }
 
-    llama_memory_clear(llama_get_memory(ctx), true);
+    limpiar();
     if (!evaluar(tp)) return false;
 
     std::vector<std::pair<uint32_t, uint32_t>> simbolos;
@@ -526,7 +531,7 @@ bool motor::decodificar(const std::string & pre, const codigo & c, std::string &
     }
     if (c.n_tokens == 0 || c.palabras.size() < 2) return false;
     std::vector<llama_token> tp = tokenizar(pre, true);
-    llama_memory_clear(llama_get_memory(ctx), true);
+    limpiar();
     if (!evaluar(tp)) return false;
     rans_dec dec;
     dec.iniciar(c.palabras);
@@ -544,51 +549,121 @@ bool motor::decodificar(const std::string & pre, const codigo & c, std::string &
     return true;
 }
 
-int motor::clasificar(const std::string & texto) {
-    if (regs.size() <= 1 || !ctx) return 0;
-    std::string lista, gramatica = "root ::= ";
-    for (size_t i = 0; i < regs.size(); ++i) {
-        lista += (i ? ", " : "") + regs[i].nombre;
-        std::string esc;
-        for (char c : regs[i].nombre) { if (c == '"' || c == '\\') esc += '\\'; esc += c; }
-        gramatica += (i ? " | \"" : "\"") + esc + "\"";
-    }
-    const std::string prompt = plantilla(
-        "Elige el tema que mejor describe el texto.\nTemas: " + lista + ".\nTexto: «" + recortar(colapsar(texto), 700) +
-        "»\nResponde solo con el nombre del tema.");
-    std::vector<llama_token> tp = tokenizar(prompt, true);
-    if ((int) tp.size() >= N_CTX_MOTOR - 16) tp.resize(N_CTX_MOTOR - 16);
+void motor::limpiar() {
     llama_memory_clear(llama_get_memory(ctx), true);
-    if (!evaluar(tp)) return (int) regs.size() - 1;
+    en_kv.clear();
+}
 
-    llama_sampler * s = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler * g = llama_sampler_init_grammar(vocab, gramatica.c_str(), "root");
-    if (!g) { llama_sampler_free(s); return (int) regs.size() - 1; }
-    llama_sampler_chain_add(s, g);
-    llama_sampler_chain_add(s, llama_sampler_init_greedy());
-    std::vector<llama_token> salida;
-    for (int i = 0; i < 16; ++i) {
-        const llama_token t = llama_sampler_sample(s, ctx, -1);
-        if (llama_vocab_is_eog(vocab, t)) break;
-        salida.push_back(t);
-        if (!evaluar({ t })) break;
+std::vector<double> motor::puntuar_regiones(const std::string & texto) {
+    std::vector<double> sc(regs.size(), -1e30);
+    // Lo fijo (instrucción y temas) va primero y el texto al final: entre llamadas solo se evalúa el texto.
+    std::string temas;
+    for (auto & r : regs) temas += "- " + r.nombre + (r.semilla.empty() ? "" : ": " + r.semilla) + "\n";
+    const std::string cab = "Clasifica el texto en uno de estos temas:\n" + temas + "\nResponde solo con el nombre del tema.\nTexto: «";
+    std::string t = recortar(colapsar(texto), 700);
+    std::vector<llama_token> tp;
+    for (;;) {
+        tp = tokenizar(plantilla(cab + t + "»"), true);
+        if ((int) tp.size() + 8 < N_CTX_MOTOR || t.empty()) break;
+        t = recortar(t, t.size() * 3 / 4);            // el texto cede, los temas no
     }
-    llama_sampler_free(s);
-    const std::string r = detokenizar(salida);
-    int mejor = -1;
-    size_t largo = 0;
+    // los nombres van todos en un lote después del prompt: deben caber juntos
+    std::vector<std::vector<llama_token>> nombres(regs.size());
+    size_t n_nom = 0;
+    for (size_t i = 0; i < regs.size(); ++i) { nombres[i] = tokenizar(regs[i].nombre, false); n_nom += nombres[i].size(); }
+    while ((int) (tp.size() + n_nom) + 8 >= N_CTX_MOTOR && !t.empty()) {
+        t  = recortar(t, t.size() * 3 / 4);
+        tp = tokenizar(plantilla(cab + t + "»"), true);
+    }
+    if ((int) (tp.size() + n_nom) + 8 >= N_CTX_MOTOR) return sc;
+
+    auto mem = llama_get_memory(ctx);
+    auto comun = [](const std::vector<llama_token> & a, const std::vector<llama_token> & b) {
+        size_t l = 0;
+        while (l < a.size() && l < b.size() && a[l] == b[l]) ++l;
+        return l;
+    };
+    if (cab_tok.empty()) {   // primera vez: evaluar el encabezado y guardar su KV
+        const std::vector<llama_token> tc = tokenizar(plantilla(cab), true);
+        const size_t l = comun(tc, tp);
+        if (l < 2) return sc;
+        cab_tok.assign(tp.begin(), tp.begin() + (l - 1));   // -1: el último token puede fundirse con el texto
+        limpiar();
+        if (!evaluar(cab_tok)) { cab_tok.clear(); limpiar(); return sc; }
+        cab_kv.resize(llama_state_seq_get_size(ctx, 0));
+        cab_kv.resize(llama_state_seq_get_data(ctx, cab_kv.data(), cab_kv.size(), 0));
+        en_kv = cab_tok;
+    }
+    size_t l = std::min(comun(en_kv, tp), tp.size() - 1);
+    if (l < cab_tok.size() && comun(cab_tok, tp) == cab_tok.size()) {   // el KV ya no tiene el encabezado
+        limpiar();
+        if (llama_state_seq_set_data(ctx, cab_kv.data(), cab_kv.size(), 0) == 0) { cab_tok.clear(); return sc; }
+        en_kv = cab_tok;
+        l = cab_tok.size();
+    }
+    if (l == 0) limpiar(); else llama_memory_seq_rm(mem, 0, (llama_pos) l, -1);
+    en_kv.assign(tp.begin(), tp.begin() + l);
+    if (!evaluar(std::vector<llama_token>(tp.begin() + l, tp.end()))) { limpiar(); return sc; }
+    en_kv = tp;
+
+    // log p(token) = logit - log Σ exp(logits)
+    auto logp = [&](const float * lg, llama_token tok) {
+        float mx = lg[0];
+        for (int v = 1; v < n_vocab; ++v) mx = std::max(mx, lg[v]);
+        double z = 0;
+        for (int v = 0; v < n_vocab; ++v) z += std::exp((double) (lg[v] - mx));
+        return (double) (lg[tok] - mx) - std::log(z);
+    };
+    const float * l0 = llama_get_logits_ith(ctx, -1);
+    for (size_t i = 0; i < regs.size(); ++i) if (!nombres[i].empty()) sc[i] = logp(l0, nombres[i][0]);
+
+    // Resto de cada nombre: región i = secuencia i+1, que comparte el prompt (seq_cp no copia datos
+    // con KV unificado). Todas las regiones van en un solo decode.
+    llama_batch b = llama_batch_init((int32_t) n_nom, 0, 1);
+    std::vector<std::pair<size_t, llama_token>> sig;   // para cada salida: región y token que debe seguir
     for (size_t i = 0; i < regs.size(); ++i) {
-        if (r == regs[i].nombre) return (int) i;
-        if (r.size() > largo && regs[i].nombre.rfind(r, 0) == 0) { mejor = (int) i; largo = r.size(); }
+        if (nombres[i].size() < 2) continue;
+        llama_memory_seq_cp(mem, 0, (llama_seq_id) (i + 1), 0, (llama_pos) tp.size());
+        for (size_t k = 0; k + 1 < nombres[i].size(); ++k) {
+            const int j = b.n_tokens++;
+            b.token[j]     = nombres[i][k];
+            b.pos[j]       = (llama_pos) (tp.size() + k);
+            b.n_seq_id[j]  = 1;
+            b.seq_id[j][0] = (llama_seq_id) (i + 1);
+            b.logits[j]    = true;
+            sig.push_back({ i, nombres[i][k + 1] });
+        }
     }
-    return mejor >= 0 ? mejor : (int) regs.size() - 1;
+    if (b.n_tokens > 0) {
+        if (llama_decode(ctx, b) == 0) {
+            for (int j = 0; j < b.n_tokens; ++j) sc[sig[j].first] += logp(llama_get_logits_ith(ctx, j), sig[j].second);
+        } else {
+            for (auto & s2 : sig) sc[s2.first] = -1e30;
+        }
+    }
+    llama_batch_free(b);
+    for (size_t i = 0; i < regs.size(); ++i) llama_memory_seq_rm(mem, (llama_seq_id) (i + 1), -1, -1);
+    return sc;
+}
+
+int motor::clasificar(const std::string & texto, bool calibrado) {
+    if (regs.size() <= 1 || !ctx) return 0;
+    if (calibrado && calib.size() != regs.size()) calib = puntuar_regiones("N/A");
+    const std::vector<double> sc = puntuar_regiones(texto);
+    int mejor = (int) regs.size() - 1;
+    double m = -1e29;
+    for (size_t i = 0; i < sc.size(); ++i) {
+        const double v = sc[i] - (calibrado && calib[i] > -1e29 ? calib[i] : 0.0);
+        if (sc[i] > -1e29 && v > m) { m = v; mejor = (int) i; }
+    }
+    return mejor;
 }
 
 std::string motor::generar(const std::string & instruccion, int n_max) {
     if (!ctx) return "";
     std::vector<llama_token> tp = tokenizar(plantilla(instruccion), true);
     if ((int) tp.size() + n_max >= N_CTX_MOTOR) tp.resize(std::max(0, N_CTX_MOTOR - n_max - 1));
-    llama_memory_clear(llama_get_memory(ctx), true);
+    limpiar();
     if (!evaluar(tp)) return "";
     std::vector<llama_token> out;
     for (int i = 0; i < n_max; ++i) {
@@ -627,8 +702,12 @@ static std::vector<uint16_t> mejores_claves(const std::vector<std::pair<std::str
 int motor::agregar(memoria & m, const std::string & texto, int region, int rol) {
     if (!ctx) return 0;
     int n = 0;
-    for (auto & trozo : trocear(texto)) {
-        const int reg = region >= 0 && region < (int) regs.size() ? region : clasificar(trozo);
+    const std::vector<std::string> trozos = trocear(texto);
+    std::vector<int> reg_de(trozos.size(), region);   // clasificar todo primero: los temas quedan en caché
+    if (region < 0 || region >= (int) regs.size()) for (size_t k = 0; k < trozos.size(); ++k) reg_de[k] = clasificar(trozos[k]);
+    for (size_t k = 0; k < trozos.size(); ++k) {
+        const std::string & trozo = trozos[k];
+        const int reg = reg_de[k];
         recuerdo r;
         r.region = (uint8_t) reg;
         r.rol    = (uint8_t) rol;
@@ -650,7 +729,8 @@ int motor::agregar(memoria & m, const std::string & texto, int region, int rol) 
 const std::string & motor::texto(recuerdo & r) {
     if (!r.cache.empty() || r.danado || r.cod.n_tokens == 0) return r.cache;
     std::string s;
-    if (decodificar(prefijo(r.region, r.nivel, r.rol), r.cod, s) && check8(s) == r.check) {
+    // check8(" " + s): recuerdos guardados antes de v6.1 con el espacio inicial de SentencePiece
+    if (decodificar(prefijo(r.region, r.nivel, r.rol), r.cod, s) && (check8(s) == r.check || check8(" " + s) == r.check)) {
         r.cache = s;
     } else {
         r.danado = true; // modelo o backend distinto al que lo codificó

@@ -210,6 +210,21 @@ int main(int argc, char ** argv) {
     if (!ejemplos.empty()) {
         printf("\n  reconstrucción exacta: %d/%zu\n", exactos, ejemplos.size());
         if (con_etiqueta) printf("  clasificación correcta: %d/%d (%.0f %%)\n", aciertos, con_etiqueta, 100.0 * aciertos / con_etiqueta);
+        if (con_etiqueta) { // A/B: el mismo clasificador sin calibración, y lo que cuesta cada uno
+            int sin = 0, n = 0;
+            const int64_t a0 = llama_time_us();
+            for (auto & e : ejemplos) {
+                const int esp = e.region[0] ? indice_region(regs, e.region) : -1;
+                if (esp >= 0) { ++n; sin += mot.clasificar(e.texto, false) == esp; }
+            }
+            const double ms_sin = (llama_time_us() - a0) / 1e3 / std::max(1, n);
+            const int64_t a1 = llama_time_us();
+            for (auto & e : ejemplos) if (e.region[0]) mot.clasificar(e.texto, true);
+            const double ms_con = (llama_time_us() - a1) / 1e3 / std::max(1, n);
+            printf("  clasificación sin calibrar:    %d/%d (%.0f %%), %.0f ms cada una\n", sin, n, 100.0 * sin / n, ms_sin);
+            printf("  clasificación calibrada:       %d/%d (%.0f %%), %.0f ms cada una (la que se usa)\n", aciertos, con_etiqueta,
+                   100.0 * aciertos / con_etiqueta, ms_con);
+        }
         const size_t b = mem.bytes();
         const double kv = 0; (void) kv;
         printf("  memoria: %zu B para %zu B de texto (%.1fx menos); %.2f s por recuerdo\n", b, bytes_texto,

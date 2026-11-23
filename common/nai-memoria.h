@@ -137,7 +137,9 @@ public:
     // Ajusta la memoria a su presupuesto bajando de nivel lo menos importante.
     void ajustar(memoria & m);
 
-    int clasificar(const std::string & texto);
+    // Región más probable: log p(nombre | temas con su semilla, texto) para cada región, menos el mismo
+    // valor con un texto vacío (calibración: quita la preferencia del modelo por la primera opción).
+    int clasificar(const std::string & texto, bool calibrado = true);
     std::string generar(const std::string & instruccion, int n_max);
 
     estadisticas medir(const memoria & m) const;
@@ -162,6 +164,8 @@ private:
     std::string detokenizar(const std::vector<llama_token> & t) const;
     std::string plantilla(const std::string & usuario) const;
     bool evaluar(const std::vector<llama_token> & t);
+    void limpiar();   // vacía el KV del motor (y la caché de prefijo)
+    std::vector<double> puntuar_regiones(const std::string & texto);
 
     llama_model *       model = nullptr;
     const llama_vocab * vocab = nullptr;
@@ -172,6 +176,10 @@ private:
     nai_cifrado::clave  cla;
     bool                con_modelo = false;
     std::vector<uint32_t> cum;
+    std::vector<llama_token> en_kv;   // tokens que hay ahora en el KV: el prefijo común se reutiliza
+    std::vector<double>      calib;   // puntaje de cada región con texto vacío
+    std::vector<llama_token> cab_tok; // encabezado fijo del clasificador (instrucción + temas)
+    std::vector<uint8_t>     cab_kv;  // su KV: restaurarlo es una copia, no volver a evaluarlo
 };
 
 // Partir un texto largo en trozos de hasta max_chars, respetando párrafos y oraciones.
