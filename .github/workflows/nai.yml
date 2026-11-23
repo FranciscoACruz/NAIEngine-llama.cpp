@@ -1,0 +1,54 @@
+# [NAI] Verificación multiplataforma: compila, corre test-nai y prueba la memoria con un modelo diminuto.
+# Si esto pasa en las tres plataformas, NAI corre igual en cualquier lado.
+name: NAI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: nai-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nai:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_OPENSSL=OFF
+
+      - name: Compilar
+        run: cmake --build build --config Release -j 4 --target test-nai llama-server
+
+      - name: test-nai
+        run: ctest --test-dir build -C Release -R test-nai --output-on-failure
+
+      - name: Memoria con modelo (sesión por defecto, turnos, recarga)
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          curl -sSfL -o m.gguf https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf
+          mkdir -p ses
+          ./build/bin/llama-server -m m.gguf -c 1024 -np 1 --port 8099 --nai-memoria --nai-sesiones ses --no-webui > srv.log 2>&1 &
+          for i in $(seq 60); do curl -sf localhost:8099/health >/dev/null && break; sleep 1; done
+          for t in "Bruno is a dog who likes the beach" "Tom is a cat" "Where does Bruno play"; do
+            curl -sSf localhost:8099/v1/chat/completions -H 'Content-Type: application/json' \
+              -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$t\"}],\"max_tokens\":8}" > /dev/null
+            sleep 2
+          done
+          kill %1; wait || true
+          grep "diccionario de tokens" srv.log
+          grep -- "-> 6 enviados" srv.log
+          ls ses/nai-*.mem

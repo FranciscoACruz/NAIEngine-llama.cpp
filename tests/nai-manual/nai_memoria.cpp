@@ -9,7 +9,7 @@
 //   6. aprender de un archivo o URL (opcional)
 //
 // Uso:
-//   nai_memoria -m modelo.gguf [-t 4] [--memoria BYTES] [-c "lápiz"] [-f recuerdos.txt]
+//   nai_memoria -m modelo.gguf [-t 4] [--memoria BYTES] [-c "lápiz"] [-f recuerdos.txt] [--compacta]
 //               [--aprender archivo|URL] [--consulta "pregunta"] [--guardar mem.bin] [--cargar mem.bin]
 //               [-r regiones.txt] [--escribir-regiones regiones.txt]
 //   nai_memoria -m modelo.gguf --cargar DIR/biblioteca.mem --exportar recuerdos.jsonl [-r regiones.txt]
@@ -102,6 +102,7 @@ int main(int argc, char ** argv) {
     bool consultas_propias = false;
     long memoria_bytes = 0;
     int n_threads = 4;
+    bool compacta = false; // [NAI] --compacta: codificar con el modelo
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto sig = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -117,6 +118,7 @@ int main(int argc, char ** argv) {
         else if (a == "--cargar") cargar = sig();
         else if (a == "--exportar") exportar = sig();
         else if (a == "--clave") ruta_clave = sig();
+        else if (a == "--compacta") compacta = true;
         else if (a == "--consulta") { if (!consultas_propias) consultas.clear(); consultas_propias = true; consultas.push_back(sig()); }
         else { fprintf(stderr, "opción desconocida: %s\n", a.c_str()); return 1; }
     }
@@ -131,6 +133,8 @@ int main(int argc, char ** argv) {
     if (!model) { fprintf(stderr, "no se pudo cargar %s\n", ruta.c_str()); return 1; }
 
     motor mot(model, n_threads, regs);
+    mot.usar_codificacion_modelo(compacta);
+    printf("codificación: %s\n", compacta ? "con el modelo (compacta)" : "diccionario de tokens (portable)");
     if (!mot.ok()) { fprintf(stderr, "no se pudo crear el contexto\n"); return 1; }
     regs = mot.regiones();
     if (!ruta_clave.empty()) {

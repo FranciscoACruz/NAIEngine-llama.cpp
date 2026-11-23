@@ -1,4 +1,4 @@
-#include "nai-pdf.h" // [NAI] lectura de PDF
+#include "nai-lector.h" // [NAI] documentos (PDF, Word...) como texto
 #include "server-tools.h"
 
 #include "subproc.h"
@@ -451,6 +451,15 @@ private:
     }
 };
 
+// [NAI] documentos que se leen como texto (el resto se lee tal cual)
+static bool nai_es_documento(const std::string & ruta) {
+    const auto p = ruta.rfind('.');
+    if (p == std::string::npos) return false;
+    std::string e = ruta.substr(p + 1);
+    for (auto & c : e) c = (char) std::tolower((unsigned char) c);
+    return e == "pdf" || e == "docx" || e == "doc" || e == "rtf" || e == "odt" || e == "pages";
+}
+
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     std::string cwd = json_value(params, "cwd", std::string());
     return std::make_unique<tools_io_basic>(cwd);
@@ -485,7 +494,7 @@ struct server_tool_read_file : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Read the contents of a file (PDF files are converted to text). Optionally specify a 1-based line range. "
+                {"description", "Read the contents of a file (PDF, Word, RTF and ODT documents are converted to text). Optionally specify a 1-based line range. "
                                 "If append_loc is true, each line is prefixed with its line number (e.g. \"1\u2192...\")."},
                 {"parameters", {
                     {"type", "object"},
@@ -513,18 +522,19 @@ struct server_tool_read_file : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
-        if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1 && !nai::es_pdf(io->resolve(path))) {
+        if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1 && !nai_es_documento(path)) {
             return {{"error", string_format(
                 "file too large (%zu bytes, max %zu). Use start_line/end_line to read a portion.",
                 (size_t)file_size, SERVER_TOOL_READ_FILE_MAX_SIZE)}};
         }
 
         std::string content;
-        if (nai::es_pdf(io->resolve(path))) { // [NAI] PDF: se lee su texto, no sus bytes
-            std::string error;
-            if (!nai::pdf_a_texto(io->resolve(path), content, error)) {
-                return {{"error", "cannot read PDF " + path + ": " + error}};
+        if (nai_es_documento(path)) { // [NAI] documentos: su texto, no sus bytes
+            const auto doc = nai_lector::leer_archivo(io->resolve(path));
+            if (!doc.ok) {
+                return {{"error", "cannot read document " + path + ": " + doc.error}};
             }
+            content = doc.texto;
         } else if (!io->read_file(path, content)) {
             return {{"error", "failed to open file: " + path}};
         }

@@ -155,3 +155,9 @@ AGENTS.local.md
 .pi/SYSTEM.md
 venv/
 models-nai/
+
+# NAI: datos locales, nunca al repositorio
+sesiones/
+sesiones-prueba/
+.nai-clave
+.DS_Store

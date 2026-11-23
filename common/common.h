@@ -571,6 +571,8 @@ struct common_params {
     int32_t     nai_sesion_ttl  = 86400;    // [NAI] segundos sin actividad antes de eliminar una sesión (24 h)
     bool        nai_memoria     = false;    // [NAI] memoria reconstructiva por regiones en lugar de acumular el KV
     int64_t     nai_memoria_bytes    = 16384;     // [NAI] tamaño fijo de la memoria de cada sesión
+    bool        nai_memoria_compacta = false;
+    std::string nai_sesion_defecto   = "web";     // [NAI] sesión de memoria para clientes sin nai_session ("" = sin memoria)     // [NAI] codificar recuerdos con el modelo (compacto, no portable)
     int64_t     nai_biblioteca_bytes = 8 << 20;   // [NAI] tamaño fijo de la biblioteca compartida (documentos)
     std::string nai_regiones;               // [NAI] archivo de regiones "peso|tema|semilla" (vacío = por defecto)
     bool        nai_lector_red_local = false; // [NAI] permitir leer URLs de la red local (desactivado por seguridad)

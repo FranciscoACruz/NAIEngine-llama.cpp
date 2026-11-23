@@ -258,6 +258,16 @@ static resultado convertir_externo(const std::string & contenido, const std::str
     bool ok = false;
     if (ext == "pdf") {
         ok = ejecutar({ "pdftotext", "-enc", "UTF-8", "-layout", tmp, "-" }, salida, error);
+#if defined(__APPLE__)
+        if (!ok) { // macOS sin Poppler: PDFKit del sistema (JavaScript for Automation), sin instalar nada
+            std::string e2;
+            ok = ejecutar({ "osascript", "-l", "JavaScript", "-e",
+                            "function run(a){ObjC.import('Quartz');"
+                            "var d=$.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(a[0]));"
+                            "if(!d||d.isNil())return '';var s=d.string;return (s&&!s.isNil())?s.js:'';}",
+                            tmp }, salida, e2);
+        }
+#endif
         if (!ok) error += " (instala poppler: brew install poppler / apt install poppler-utils)";
     } else {
         ok = ejecutar({ "textutil", "-convert", "txt", "-encoding", "UTF-8", "-stdout", tmp }, salida, error);
@@ -270,7 +280,7 @@ static resultado convertir_externo(const std::string & contenido, const std::str
     std::filesystem::remove(tmp, ec);
     if (!ok) { r.error = error; return r; }
     r.texto = a_utf8(salida);
-    r.ok = !r.texto.empty();
+    r.ok = r.texto.find_first_not_of(" \t\r\n\f\v") != std::string::npos; // pdftotext deja "\f" en un PDF sin texto
     if (!r.ok) r.error = "el documento no tiene texto extraíble (¿es una imagen escaneada?)";
     return r;
 }

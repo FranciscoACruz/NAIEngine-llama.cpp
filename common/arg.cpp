@@ -1739,6 +1739,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_SESION_TTL"));
     add_opt(common_arg(
+        {"--nai-memoria"},
+        "[NAI] memoria reconstructiva por regiones: con \"nai_session\", la conversación ya no se acumula "
+        "en el KV cache; se guarda comprimida con el propio modelo en una memoria de tamaño fijo y en cada "
+        "petición se reconstruye solo lo relevante. Activa también POST /nai/aprender (documentos y URLs) "
+        "y GET /nai/memoria. Requiere --nai-sesiones DIR (default: desactivado)",
+        [](common_params & params) {
+            params.nai_memoria = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_MEMORIA"));
+    add_opt(common_arg(
+        {"--nai-sesion-defecto"}, "ID",
+        string_format("[NAI] sesión de memoria para los clientes que no mandan nai_session (interfaz web, "
+                      "clientes OpenAI); vacío = esos clientes no usan memoria (default: %s)", params.nai_sesion_defecto.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.nai_sesion_defecto = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_SESION_DEFECTO"));
+    add_opt(common_arg(
+        {"--nai-memoria-compacta"},
+        "[NAI] codificar los recuerdos con las probabilidades del modelo: ocupan menos, pero solo se leen "
+        "con el mismo entorno (modelo, backend, -ngl, hilos, versión). Por defecto se usa el diccionario "
+        "de tokens, que se lee igual en cualquier máquina y sin pasar por el modelo",
+        [](common_params & params) {
+            params.nai_memoria_compacta = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_MEMORIA_COMPACTA"));
+    add_opt(common_arg(
+        {"--nai-memoria-bytes"}, "N",
+        string_format("[NAI] tamaño fijo de la memoria de cada sesión, en bytes (default: %lld)", (long long) params.nai_memoria_bytes),
+        [](common_params & params, const std::string & value) {
+            const long long v = std::stoll(value);
+            if (v < 256) {
+                throw std::invalid_argument("--nai-memoria-bytes debe ser al menos 256");
+            }
+            params.nai_memoria_bytes = v;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_MEMORIA_BYTES"));
+    add_opt(common_arg(
+        {"--nai-biblioteca-bytes"}, "N",
+        string_format("[NAI] tamaño fijo de la biblioteca compartida (lo aprendido de documentos), en bytes (default: %lld)",
+                      (long long) params.nai_biblioteca_bytes),
+        [](common_params & params, const std::string & value) {
+            const long long v = std::stoll(value);
+            if (v < 1024) {
+                throw std::invalid_argument("--nai-biblioteca-bytes debe ser al menos 1024");
+            }
+            params.nai_biblioteca_bytes = v;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_BIBLIOTECA_BYTES"));
+    add_opt(common_arg(
+        {"--nai-regiones"}, "ARCHIVO",
+        "[NAI] regiones de la memoria, una por línea: peso|tema|semilla (peso 3 = prioritario; default: 26 regiones integradas)",
+        [](common_params & params, const std::string & value) {
+            params.nai_regiones = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_REGIONES"));
+    add_opt(common_arg(
+        {"--nai-cifrado"}, "ARCHIVO",
+        "[NAI] cifra en disco las sesiones (KV) y las memorias (.mem) con ChaCha20-Poly1305. ARCHIVO contiene la "
+        "clave (64 caracteres hex); si no existe se crea. Guárdalo FUERA de la carpeta de sesiones y respáldalo: "
+        "sin la clave las sesiones cifradas no se recuperan (default: sin cifrado)",
+        [](common_params & params, const std::string & value) {
+            params.nai_cifrado = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_CIFRADO"));
+    add_opt(common_arg(
+        {"--nai-lector-red-local"},
+        "[NAI] permitir que POST /nai/aprender lea URLs de la red local o de localhost (default: rechazadas por seguridad)",
+        [](common_params & params) {
+            params.nai_lector_red_local = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--nai-triaje"},
         "[NAI] analizar el prompt antes de generar y pedir aclaración si es ambiguo (default: desactivado)",
         [](common_params & params) {

@@ -533,6 +533,7 @@ struct server_slot {
 
     std::function<void(const server_slot &)> nai_al_liberar; // [NAI] traza del planificador
     bool nai_historial_recortado = false;                     // [NAI] el historial se recortó al lanzar
+    bool nai_activa = false;                                  // [NAI] cuenta en las peticiones activas
 
     void release() {
         if (is_processing()) {
@@ -1704,11 +1705,14 @@ private:
                 cfg.n_threads        = params_base.cpuparams.n_threads;
                 cfg.ruta_regiones    = params_base.nai_regiones;
                 cfg.clave            = nai_cla;
+                cfg.compacta         = params_base.nai_memoria_compacta;
                 auto mem = std::make_shared<nai_mem::servicio>(model_tgt, cfg);
                 if (mem->ok()) {
                     std::atomic_store(&nai_memoria, mem);
-                    SRV_INF("[NAI] memoria activa: %lld B por sesión, biblioteca de %lld B, en '%s'\n",
-                            (long long) cfg.bytes_sesion, (long long) cfg.bytes_biblioteca, nai_dir.c_str());
+                    SRV_INF("[NAI] memoria activa: %lld B por sesión, biblioteca de %lld B, en '%s' (%s)\n",
+                            (long long) cfg.bytes_sesion, (long long) cfg.bytes_biblioteca, nai_dir.c_str(),
+                            cfg.compacta ? "codificación con el modelo: compacta, solo para este entorno"
+                                         : "diccionario de tokens: portable");
                 } else {
                     SRV_WRN("%s\n", "[NAI] no se pudo crear el contexto de la memoria; queda desactivada");
                 }
@@ -1872,6 +1876,12 @@ private:
             slot.callback_on_release = [this](int id_slot) {
                 if (server_slot * sl = get_slot_by_id(id_slot)) {
                     nai_guardar_slot(*sl); // [NAI]
+                    if (sl->nai_activa) {  // [NAI] anti-congelamiento: la petición terminó
+                        sl->nai_activa = false;
+                        if (nai_memoria) {
+                            nai_memoria->peticion(false);
+                        }
+                    }
                 }
                 queue_tasks.pop_deferred_task(id_slot);
             };
@@ -2378,6 +2388,10 @@ private:
         n_empty_consecutive = 0;
 
         SLT_INF(slot, "processing task, is_child = %d\n", slot.task->is_child());
+        if (nai_memoria && !slot.nai_activa) { // [NAI] anti-congelamiento: el trabajo de fondo espera
+            slot.nai_activa = true;
+            nai_memoria->peticion(true);
+        }
         return true;
     }
 
@@ -4946,7 +4960,7 @@ static std::string nai_texto_mensaje(const json & contenido) {
     return t;
 }
 
-static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json & body) {
+static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json & body, int turnos) {
     if (!body.contains("messages") || !body.at("messages").is_array()) {
         return;
     }
@@ -4977,9 +4991,21 @@ static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json
     if (!sistema.empty()) {
         nuevos.push_back({ { "role", "system" }, { "content", sistema } });
     }
-    if (!rec.previo_usuario.empty() && !rec.previo_asistente.empty()) {
-        nuevos.push_back({ { "role", "user" },      { "content", rec.previo_usuario } });
-        nuevos.push_back({ { "role", "assistant" }, { "content", rec.previo_asistente } });
+    // Turnos recientes: si el cliente ya manda su historial, ese manda (es la fuente de verdad y evita
+    // mezclar conversaciones que compartan sesión); si solo manda el último mensaje, se usan los guardados.
+    std::vector<json> previos;
+    for (int i = idx - 1; i >= 0 && (int) previos.size() < 2 * turnos; --i) {
+        const std::string rol = json_value(msgs[i], "role", std::string());
+        if ((rol == "user" || rol == "assistant") && !msgs[i].contains("tool_calls")) previos.push_back(msgs[i]);
+    }
+    if (!previos.empty()) {
+        if (json_value(previos.back(), "role", std::string()) == "assistant") previos.pop_back(); // empezar en usuario
+        for (auto it = previos.rbegin(); it != previos.rend(); ++it) nuevos.push_back(*it);
+    } else {
+        for (const auto & t : rec.turnos) {
+            nuevos.push_back({ { "role", "user" },      { "content", t.first } });
+            nuevos.push_back({ { "role", "assistant" }, { "content", t.second } });
+        }
     }
     nuevos.push_back(msgs[idx]);
     SRV_INF("[NAI] memoria: %d recuerdos, %zu mensajes recibidos -> %zu enviados al modelo\n",
@@ -5379,11 +5405,16 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = json::parse(req.body);
-        // [NAI] memoria reconstructiva: solo con sesión
+        // [NAI] memoria reconstructiva: con la sesión del cliente o, si no manda una (interfaz web,
+        //       clientes OpenAI), con la sesión por defecto: la plática fluye igual en cualquier cliente
         if (auto mem = std::atomic_load(&ctx_server.nai_memoria)) {
-            const std::string id = json_value(body, "nai_session", std::string());
+            std::string id = json_value(body, "nai_session", std::string());
+            if (id.empty() && !params.nai_sesion_defecto.empty() && !body.contains("tools")) {
+                id = params.nai_sesion_defecto;
+                body["nai_session"] = id;
+            }
             if (!id.empty()) {
-                nai_preparar_mensajes(*mem, ctx_server.nai_handle(id), body);
+                nai_preparar_mensajes(*mem, ctx_server.nai_handle(id), body, mem->turnos());
             }
         }
         json body_parsed = oaicompat_chat_params_parse(

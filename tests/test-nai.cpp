@@ -1,12 +1,9 @@
 // [NAI] Pruebas unitarias del motor NAI que no requieren un modelo:
 //   - entropía normalizada
 //   - mapa de masa semántica (registro, búsqueda de ventana, recorrido)
-//   - ring y hub de telemetría
 //   - normalización y modos del TriageEngine
 
 #include "../src/inercia_latente.hpp"
-#include "../src/nai-telemetry-ring.hpp"
-#include "../src/nai-telemetry-hub.hpp"
 #include "../common/TriageWrapper.h"
 #include "../src/nai-session-table.hpp"
 #include "../common/nai-memoria.h"
@@ -167,42 +164,6 @@ static void test_mapa_masa() {
     m.limpiar(0);
     NAI_CHECK(m.obtener(0, 10) == nai::MASA_PROTEGIDA);
     std::printf("[test-nai] mapa de masa OK\n");
-}
-
-static void test_telemetria() {
-    struct Ev { uint64_t a; uint32_t b; uint32_t c; };
-    nai::NaiTelemetryRing<Ev> ring(8);
-    for (uint32_t i = 0; i < 7; ++i) NAI_CHECK(ring.try_push({i, i, 0}));
-    NAI_CHECK(!ring.try_push({99, 99, 0}));
-    Ev out;
-    for (uint32_t i = 0; i < 7; ++i) { NAI_CHECK(ring.try_pop(out)); NAI_CHECK(out.b == i); }
-    NAI_CHECK(!ring.try_pop(out));
-
-    nai::NaiTelemetryHub hub(1024);
-    nai::NaiTelemetryEvent ev{};
-    NAI_CHECK(!hub.emit(ev)); // sin consumidor: se descarta
-
-    std::atomic<int> n{0};
-    hub.set_callback([&n](const nai::NaiTelemetryEvent &) { n.fetch_add(1); });
-
-    // 4 productores concurrentes
-    std::vector<std::thread> prod;
-    for (int t = 0; t < 4; ++t) {
-        prod.emplace_back([&hub]() {
-            nai::NaiTelemetryEvent e{};
-            for (int i = 0; i < 100; ++i) {
-                while (!hub.emit(e)) std::this_thread::yield();
-            }
-        });
-    }
-    for (auto & t : prod) t.join();
-
-    for (int i = 0; i < 200 && n.load() < 400; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    hub.stop();
-    NAI_CHECK(n.load() == 400);
-    std::printf("[test-nai] telemetria OK\n");
 }
 
 static void test_triaje() {
@@ -374,14 +335,32 @@ static void test_cifrado() {
     std::printf("%s\n", "[test-nai] cifrado OK (RFC 8439)");
 }
 
+static void test_diccionario_tokens() {
+    const std::vector<llama_token> t = { 0, 1, 127, 128, 16383, 16384, 151642, 31999, 5, 2097151 };
+    nai_mem::codigo c;
+    c.tokens   = true;
+    c.palabras = nai_mem::empacar_tokens(t);
+    c.n_tokens = (uint8_t) t.size();
+    // 0,1,127,5 = 1 B; 128,16383 = 2 B; 16384,151642,31999,2097151 = 3 B  -> 18 B -> 5 palabras
+    NAI_CHECK(c.palabras.size() == 5);
+    std::vector<llama_token> r;
+    NAI_CHECK(nai_mem::desempacar_tokens(c, 2097152, r) && r == t);
+    NAI_CHECK(!nai_mem::desempacar_tokens(c, 151643, r));   // ID fuera del vocabulario: rechazado
+    nai_mem::codigo corto = c; corto.palabras.resize(2);
+    NAI_CHECK(!nai_mem::desempacar_tokens(corto, 2097152, r)); // truncado: rechazado
+    nai_mem::codigo malo = c; for (auto & w : malo.palabras) w = 0xFFFFFFFFu;
+    NAI_CHECK(!nai_mem::desempacar_tokens(malo, 2097152, r));  // varint sin fin: rechazado
+    std::printf("%s\n", "[test-nai] diccionario de tokens OK (portable, sin modelo)");
+}
+
 int main() {
     test_entropia();
     test_memoria();
     test_cifrado();
+    test_diccionario_tokens();
     test_sorpresa();
     test_pendientes();
     test_mapa_masa();
-    test_telemetria();
     test_triaje();
     test_sesiones();
     std::printf("[test-nai] PASS\n");

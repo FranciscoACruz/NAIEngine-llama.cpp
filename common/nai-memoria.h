@@ -24,6 +24,7 @@
 #include "llama.h"
 #include "nai-cifrado.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -51,12 +52,23 @@ enum rol   : uint8_t { DOCUMENTO = 0, USUARIO = 1, ASISTENTE = 2 };
 const char * nombre_nivel(int n);
 const char * nombre_rol(int r);
 
-// Texto codificado con el modelo (rANS de 64 bits, frecuencias de 24 bits).
+// Texto codificado. Dos métodos:
+//   tokens (portable, por defecto): IDs de token del vocabulario en enteros de longitud variable.
+//          Sin números flotantes: se lee idéntico en cualquier máquina, backend o versión, y
+//          decodificar no requiere pasar por el modelo (es una consulta de tabla).
+//   modelo (compacto): rANS de 64 bits con las probabilidades del modelo (frecuencias de 24 bits).
+//          Ocupa menos, pero solo se lee con el MISMO entorno (modelo, backend, -ngl, hilos, versión).
 struct codigo {
     uint8_t               n_tokens = 0;
+    bool                  tokens   = false;  // true = diccionario de tokens (portable)
     std::vector<uint32_t> palabras;
     size_t bytes() const { return 2 + 4 * palabras.size(); }
 };
+
+// Diccionario de tokens: varint de 7 bits por byte, empacado en palabras de 32 bits (little-endian).
+// desempacar valida longitud e IDs < n_vocab: un recuerdo dañado se rechaza, nunca se lee fuera de rango.
+std::vector<uint32_t> empacar_tokens(const std::vector<llama_token> & t);
+bool                  desempacar_tokens(const codigo & c, int n_vocab, std::vector<llama_token> & t);
 
 struct recuerdo {
     uint8_t               region = 0;
@@ -76,7 +88,9 @@ struct recuerdo {
 
 struct memoria {
     std::vector<recuerdo> recuerdos;
-    std::string           previo_usuario;    // memoria de trabajo: el último turno, literal
+    // Memoria de trabajo: los últimos turnos, literales, en anillo dentro de la cadena
+    // (separados por SEP_TURNO; un .mem anterior sin separador se lee como un solo turno).
+    std::string           previo_usuario;
     std::string           previo_asistente;
     size_t                presupuesto = 16384;
     bool                  sucia       = false;
@@ -94,8 +108,7 @@ struct estadisticas {
 // Resultado de recordar: lo que se le da al modelo antes de responder.
 struct contexto_recordado {
     std::string bloque;           // "Recuerdos: ..." para el mensaje de sistema
-    std::string previo_usuario;   // turno anterior, literal
-    std::string previo_asistente;
+    std::vector<std::pair<std::string, std::string>> turnos;   // últimos turnos (usuario, asistente), del más viejo al más nuevo
     int         n_recuerdos = 0;
 };
 
@@ -132,6 +145,8 @@ public:
 
     // Con clave activa los archivos se cifran (ChaCha20-Poly1305); los archivos sin cifrar se siguen leyendo.
     void usar_clave(const nai_cifrado::clave & c) { cla = c; }
+    // true = codificar con el modelo (compacto, ligado al entorno); false = diccionario de tokens (portable)
+    void usar_codificacion_modelo(bool si) { con_modelo = si; }
     bool guardar(const memoria & m, const std::string & ruta) const;
     bool cargar(memoria & m, const std::string & ruta) const;
 
@@ -155,6 +170,7 @@ private:
     std::vector<region> regs;
     uint64_t            huella_ = 0;
     nai_cifrado::clave  cla;
+    bool                con_modelo = false;
     std::vector<uint32_t> cum;
 };
 
@@ -177,13 +193,16 @@ public:
         int         n_threads        = 4;
         int         max_recuerdos    = 6;
         size_t      max_chars        = 2400;
+        int         turnos           = 3;           // turnos recientes que se conservan literales
         std::string ruta_regiones;                  // vacío = regiones por defecto
         nai_cifrado::clave clave;                   // activa = cifrar los .mem
+        bool        compacta         = false;       // true = codificar con el modelo (no portable)
     };
 
     servicio(llama_model * model, const config & cfg);
     ~servicio();
     bool ok() const { return mot && mot->ok(); }
+    int  turnos() const { return cfg.turnos; }
 
     // Antes de responder (sincrónico): recuerdos relevantes + turno anterior.
     contexto_recordado preparar(uint64_t sesion, const std::string & consulta);
@@ -197,6 +216,11 @@ public:
     int indice_region(const std::string & nombre) const;  // -1 si no existe
 
     std::string estado_json();  // estado de la biblioteca y del trabajo pendiente (JSON)
+
+    // Regla anti-congelamiento: el servidor avisa cuándo empieza y termina cada petición. El trabajo
+    // de fondo (codificar turnos, aprender documentos) espera mientras haya alguna en curso, para no
+    // competir por CPU/GPU con la respuesta (con un tope de espera para que la cola no se atore).
+    void peticion(bool empieza) { activas.fetch_add(empieza ? 1 : -1); }
 
 private:
     memoria & sesion_mem(uint64_t sesion);   // requiere mtx
@@ -218,6 +242,7 @@ private:
     bool                               salir = false;
     std::thread                        hilo;
     size_t                             pendientes_aprender = 0;
+    std::atomic<int>                   activas{0};
     size_t                             aprendidos = 0;
 };
 

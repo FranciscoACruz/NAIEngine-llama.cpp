@@ -116,7 +116,7 @@ Los binarios quedan en `build/bin/`. En Windows, en `build\bin\Release\`.
 ./build/bin/test-nai
 ```
 
-No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, telemetría concurrente, triaje, SipHash-2-4 (vectores oficiales), la tabla de sesiones, las claves y el troceo de la memoria, la lectura de HTML y ChaCha20-Poly1305 (vector oficial del RFC 8439). También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
+No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, triaje, SipHash-2-4 (vectores oficiales), la tabla de sesiones, las claves y el troceo de la memoria, la lectura de HTML, el diccionario de tokens de la memoria (ida y vuelta y rechazo de datos dañados) y ChaCha20-Poly1305 (vector oficial del RFC 8439). También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
 
 ### 2.6 Descargar un modelo
 
@@ -148,6 +148,13 @@ Con `--capas 24 --embd 896 --cabezas 14 --cabezas-kv 2 --ff 4864 --f16 --vocab m
 
 Expone la interfaz web en `http://localhost:8080` y una API compatible con OpenAI en `/v1/chat/completions`.
 
+**Equipos con poca memoria (por ejemplo, Mac M1 de 8 GB).** `--fit` viene activado y ajusta capas y contexto a la memoria libre; deja más margen para el sistema con `-fitt 2048` (MiB libres por dispositivo) y compila con `-j4` para no saturar la RAM:
+
+```console
+cmake --build build --config Release -j4
+./build/bin/llama-server -m qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8080 -fitt 2048 --nai-sesiones ./sesiones --nai-memoria
+```
+
 ### 3.2 API con sesión persistente
 
 Cada petición puede llevar `"nai_session"`. El backend que llama al servidor genera el id (aleatorio, ≥ 128 bits) y lo asocia al usuario autenticado:
@@ -165,7 +172,7 @@ Si el servidor se reinicia o el slot se reutiliza, la siguiente petición con el
 ./build/bin/llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf --port 8080 --nai-sesiones ./sesiones --nai-memoria
 ```
 
-Con la memoria activa, el cliente manda **solo el mensaje nuevo** con su `nai_session`; el servidor agrega los recuerdos y el turno anterior:
+Con la memoria activa, el cliente manda **solo el mensaje nuevo** con su `nai_session`; el servidor agrega los recuerdos y los últimos 3 turnos. Si el cliente manda su historial completo, se respetan sus últimos turnos y el resto se sustituye por recuerdos. La interfaz web y los clientes OpenAI que no mandan `nai_session` usan la sesión `web` (`--nai-sesion-defecto ID`; vacío = sin memoria); las peticiones con `tools` no se tocan:
 
 ```console
 curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d "{\"nai_session\":\"$SESION\",\"messages\":[{\"role\":\"user\",\"content\":\"¿Cuánto ahorro cada quincena?\"}]}"
@@ -226,7 +233,8 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 |---|---|---|---|---|
 | Autopista de muestreo | `--nai-autopista` | apagada | **No** con temp 0. Con temp > 0, error acotado por `1 − p_min` | Devuelve el top-1 sin recorrer la cadena de samplers cuando el resultado ya está decidido |
 | Umbral de la autopista | `--nai-autopista-p-min P` | `0.99` | — | Probabilidad mínima del top-1 para tomar el atajo con temp > 0. Rango (0, 1] |
-| Desalojo selectivo | `--context-shift --nai-desalojo` | apagado | Solo cuando el contexto se llena | En el *context shift* descarta la ventana de **menor masa** en lugar de la más antigua |
+| Desalojo selectivo | `--context-shift --nai-desalojo` | apagado | Solo cuando el contexto se llena | En el *context shift* descarta la ventana de **menor masa** en lugar de la más antigua. Si el historial que manda el cliente ya no cabe, lo recorta (inicio + lo más reciente) en lugar de rechazar la petición; la respuesta lo marca con `"truncated": true` |
+| Lectura de documentos en CLI y herramientas | `/read archivo.pdf`, `--tools read_file` | — | No | Extrae el texto de PDF (`pdftotext` o, en macOS, PDFKit del sistema), Word, RTF y ODT en lugar de pasar sus bytes; un PDF escaneado sin texto se rechaza. Un solo lector para todo: `common/nai-lector.cpp` |
 | Memoria gravitatoria *(experimental)* | `--nai-gravedad γ` | `0` (apagada) | **Sí** | Atenúa la atención hacia tokens generados de poca masa: sesgo `−γ·Δt/(masa+ε)` |
 | Suavizado de la gravedad | `--nai-gravedad-eps ε` | `0.05` | — | Evita dividir entre cero en masas muy bajas. Debe ser > 0 |
 | Sesiones persistentes | `--nai-sesiones DIR` | apagadas | No | Guarda y restaura el KV cache de cada conversación |
@@ -234,6 +242,8 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 | Triaje (CLI) | `--nai-triaje` | apagado | Solo pide aclaración | Detecta peticiones cortas y ambiguas y pregunta antes de generar |
 | Memoria reconstructiva | `--nai-memoria` (requiere `--nai-sesiones DIR`) | apagada | Cambia lo que ve el modelo: recuerdos en lugar del historial | La conversación no se acumula en el KV cache; se guarda comprimida con el modelo en una memoria fija por regiones |
 | Tamaño de la memoria por sesión | `--nai-memoria-bytes N` | `16384` | — | Presupuesto fijo de cada sesión |
+| Sesión por defecto | `--nai-sesion-defecto ID` | `web` | — | Sesión de memoria para clientes sin `nai_session` (interfaz web, clientes OpenAI); vacío = sin memoria |
+| Memoria compacta | `--nai-memoria-compacta` | apagada (portable) | — | Codifica los recuerdos con el modelo: ocupan menos, pero solo se leen con el mismo modelo, backend, `-ngl`, hilos y versión |
 | Tamaño de la biblioteca | `--nai-biblioteca-bytes N` | `8388608` (8 MiB) | — | Presupuesto de lo aprendido de documentos |
 | Regiones de la memoria | `--nai-regiones ARCHIVO` | 26 integradas | — | Líneas `peso\|tema\|semilla` |
 | URLs de la red local | `--nai-lector-red-local` | rechazadas | — | Permite que `/nai/aprender` lea localhost o la red interna |
@@ -393,7 +403,7 @@ $$B_{KV} = n_{\text{capas}} \cdot 2 \cdot n_{\text{cabezas KV}} \cdot d_{\text{c
 - **Cifrado:** sin `--nai-cifrado`, los archivos contienen la conversación sin cifrar. Con datos sensibles (por ejemplo, financieros) activa `--nai-cifrado` (§5.13) y, además, guarda la carpeta en un volumen cifrado (FileVault, LUKS, BitLocker).
 - **Limitación:** no se restauran sesiones con multimodal ni con decodificación especulativa.
 
-**Relación con `bloque_id`:** el campo `bloque_id` de la telemetría y la sesión está reservado para conectar NAI con un proyecto padre (generador de API de alto rendimiento) sin cambiar el formato.
+**Relación con `bloque_id`:** el campo `bloque_id` de la sesión está reservado para conectar NAI con un proyecto padre (generador de API de alto rendimiento) sin cambiar el formato.
 
 ### 5.9 Memoria reconstructiva por regiones (`--nai-memoria`, `common/nai-memoria.cpp`)
 
@@ -406,14 +416,17 @@ petición {nai_session, messages:[...]}            ← el cliente puede mandar s
    │ 1. claves de la pregunta → recuerdos de la sesión y de la biblioteca (GPS)
    │    sin coincidencias → el modelo clasifica la pregunta y se va a su región
    │ 2. reconstruir con el modelo los recuerdos elegidos (máx. 2 por región: cruza temas)
-   │ 3. mensajes = sistema + recuerdos · turno anterior · mensaje actual
+   │    segundo salto: las claves de los mejores recuerdos activan otros (≥ 2 claves en común)
+   │ 3. mensajes = sistema + recuerdos · últimos 3 turnos · mensaje actual
    ▼
 modelo responde (KV pequeño, se libera al terminar)
    │ 4. en segundo plano: clasificar el turno, codificar usuario y asistente,
    │    ajustar al presupuesto (bajar de nivel lo menos importante), guardar DIR/nai-<hash>.mem
 ```
 
-**Codificación exacta guiada por el modelo.** Cada recuerdo se guarda como el resultado de codificación aritmética (rANS de 64 bits, frecuencias de 24 bits) con las probabilidades del propio modelo, condicionadas por un prefijo gratuito que no se guarda ("Tema: física. Usuario:"). Por el teorema de Shannon, el tamaño se acerca a:
+**Dos codificaciones.** Por defecto, cada recuerdo se guarda con el **diccionario de tokens**: los IDs del vocabulario en enteros de longitud variable (7 bits por byte; un ID < 16384 ocupa 2 B). No hay números flotantes, así que se lee idéntico en cualquier máquina, backend, `-ngl`, número de hilos o versión de llama.cpp, y leerlo es una consulta de tabla: no pasa por el modelo. El modelo solo se usa al guardar, para medir la sorpresa (claves y pistas). Con `--nai-memoria-compacta` se usa la codificación guiada por el modelo que se describe abajo: ocupa menos con un modelo bien entrenado, pero los logits deben coincidir bit a bit, de modo que cambiar de backend o de `-ngl` marca los recuerdos como dañados. El bit 5 del byte de nivel indica la codificación de cada recuerdo, así que una misma memoria puede mezclar ambas y los `.mem` anteriores se siguen leyendo.
+
+**Codificación exacta guiada por el modelo (`--nai-memoria-compacta`).** Cada recuerdo se guarda como el resultado de codificación aritmética (rANS de 64 bits, frecuencias de 24 bits) con las probabilidades del propio modelo, condicionadas por un prefijo gratuito que no se guarda ("Tema: física. Usuario:"). Por el teorema de Shannon, el tamaño se acerca a:
 
 $$\text{bits}(x_{1..n}) \approx \sum_{i=1}^{n} -\log_2 p(x_i \mid x_{\lt i}, \text{tema}) = \ln|V| \cdot \log_2 e \cdot \sum_i I_i$$
 
@@ -428,7 +441,7 @@ Es decir, **el costo de recordar un texto es exactamente su masa semántica tota
 | PISTA | Las 3 palabras más sorprendentes, codificadas | Las elige la sorpresa medida por el modelo |
 | (olvidado) | Nada | Solo cuando todo está en pista y aun así no cabe |
 
-**Claves (el GPS).** Cada recuerdo lleva 4 claves (6 en documentos): hash de 16 bits de sus palabras más sorprendentes, normalizadas (minúsculas, sin acentos, raíz de 6 letras, sin palabras de relleno). Encontrar un recuerdo no requiere reconstruirlo. Puntaje de un candidato: $10 \cdot \text{coincidencias} + \text{importancia}$; si hay candidatos con varias coincidencias, se descartan los de una sola (posible colisión del hash).
+**Claves (el GPS).** Cada recuerdo lleva 4 claves (6 en documentos): hash de 16 bits de sus palabras más sorprendentes, normalizadas (minúsculas, sin acentos, raíz de 6 letras, sin palabras de relleno). Encontrar un recuerdo no requiere reconstruirlo. Puntaje de un candidato: $10 \cdot \text{coincidencias} + \text{importancia}$; si hay candidatos con varias coincidencias, se descartan los de una sola (posible colisión del hash). **Asociación (segundo salto):** las claves de los 3 mejores recuerdos que la pregunta no tenía activan hasta 2 recuerdos más que compartan al menos 2 de ellas, con puntaje $4 \cdot \text{coincidencias} + \text{importancia}$; se le presentan al modelo marcados como «asociado». Es un razonamiento intuitivo por vecindad: lo que suele aparecer junto a lo que encontraste.
 
 **Importancia y presupuesto.**
 
@@ -640,14 +653,13 @@ petición HTTP ──► server-context.cpp
 | `src/llama-kv-cache.cpp/.h` | Memoria gravitatoria (sesgo en la máscara KQ) |
 | `src/llama-ext.h` | API pública NAI |
 | `src/nai-session-table.hpp` | Tabla de sesiones, SipHash-2-4, hashing de Fibonacci, TTL |
-| `src/nai-telemetry-hub.hpp`, `nai-telemetry-*.hpp` | Telemetría concurrente (anillo sin bloqueo) |
-| `src/nai-kv-cache-diag.hpp` | Diagnóstico del KV cache |
 | `src/llama-model.cpp` | `llama_model_get_output_head` (cabeza de salida para la lente) |
 | `common/sampling.cpp/.h` | Autopista de muestreo |
 | `common/arg.cpp`, `common/common.h` | Flags `--nai-*` y sus campos en `common_params` |
 | `common/TriageWrapper.h` | Triaje de prompts |
-| `common/nai-memoria.h/.cpp` | Memoria reconstructiva: códec rANS guiado por el modelo, niveles, claves, presupuesto, archivo `.mem` y servicio con hilo de trabajo |
-| `common/nai-lector.h/.cpp` | Lectura de URLs (con protección de red interna), HTML, PDF, Word y texto |
+| `common/nai-memoria.h/.cpp` | Memoria reconstructiva: diccionario de tokens (portable, por defecto) o rANS guiado por el modelo, niveles, claves con segundo salto, turnos recientes, presupuesto, archivo `.mem` y servicio con hilo de trabajo que cede el paso a las peticiones activas |
+| `common/nai-lector.h/.cpp` | Lector único: URLs (con protección de red interna), HTML, PDF, Word, RTF, ODT y texto; lo usan servidor, CLI (`/read`) y `--tools read_file` |
+| `.github/workflows/nai.yml` | CI: compila y prueba NAI en Linux, macOS y Windows |
 | `tools/server/server-context.cpp` | Desalojo, gravedad, sesiones y traza en el servidor |
 | `tools/server/server-task.h`, `server-queue.cpp` | Campo `nai_session` de la petición |
 | `tools/cli/cli-context.cpp/.h` | Triaje y autopista en el CLI |
@@ -805,7 +817,7 @@ La arquitectura NAI sirve donde importa **cuánto cuesta cada token** (memoria, 
 | **Conocimiento sin internet** (campo, zonas rurales, emergencias) | Sin conexión y con hardware limitado | Modelo local con memoria prioritaria en supervivencia, agricultura, medicina tradicional, ingeniería y mecánica | Memoria reconstructiva, sesiones | Disponible (`--nai-memoria`) |
 | **Creatividad e investigación** | Encontrar relaciones entre ideas lejanas | Cruzar fragmentos de regiones distintas a partir de un concepto (el ejemplo del lápiz: artista, poema, dibujo, manifiesto, matemático) | Memoria reconstructiva (`-c concepto` en `nai_memoria`) | Prototipo |
 | **Privacidad y ciberseguridad** | Conversaciones sensibles que no deben salir del equipo ni ser adivinables | Inferencia local; ids de sesión secretos con hash con clave (SipHash-2-4), permisos 0600, logs sin ids | Sesiones | Disponible |
-| **Generador de API de alto rendimiento** | Integrar inferencia en un backend de microservicios | `bloque_id` reservado para enlazar NAI con el proyecto padre | Telemetría, sesiones | Reservado |
+| **Generador de API de alto rendimiento** | Integrar inferencia en un backend de microservicios | `bloque_id` reservado para enlazar NAI con el proyecto padre | Sesiones | Reservado |
 | **Medición y docencia de LLMs** | Entender en qué capa "decide" un modelo | Lente por capa, regla Δh > τ y perplejidad por capa omitida | `nai_medir_capas` | Disponible |
 
 ### 13.2 Campos de aplicación

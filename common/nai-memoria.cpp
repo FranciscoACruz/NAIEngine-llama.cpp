@@ -199,6 +199,35 @@ static std::string recortar(const std::string & s, size_t n) {
     return s.substr(0, corte_utf8(s, n));
 }
 
+static constexpr char SEP_TURNO = '\x1e';  // separador de registros ASCII: no aparece en texto normal
+
+static std::vector<std::string> partir_turnos(const std::string & s) {
+    std::vector<std::string> v;
+    size_t a = 0;
+    for (size_t b; (b = s.find(SEP_TURNO, a)) != std::string::npos; a = b + 1) v.push_back(s.substr(a, b - a));
+    if (!s.empty()) v.push_back(s.substr(a));
+    return v;
+}
+
+// Agrega un turno al anillo; descarta los más viejos hasta caber en max_turnos y max_bytes (cada lado).
+static void anillo_turnos(memoria & m, const std::string & u, const std::string & a, int max_turnos, size_t max_bytes) {
+    auto us = partir_turnos(m.previo_usuario), as = partir_turnos(m.previo_asistente);
+    if (us.size() != as.size()) { us.clear(); as.clear(); }   // anillo inconsistente: se reinicia
+    us.push_back(recortar(u, 1500));
+    as.push_back(recortar(a, 1500));
+    auto unir = [](const std::vector<std::string> & v, size_t desde) {
+        std::string r;
+        for (size_t i = desde; i < v.size(); ++i) { if (i > desde) r += SEP_TURNO; r += v[i]; }
+        return r;
+    };
+    size_t d = us.size() > (size_t) std::max(1, max_turnos) ? us.size() - std::max(1, max_turnos) : 0;
+    for (;; ++d) {
+        m.previo_usuario   = unir(us, d);
+        m.previo_asistente = unir(as, d);
+        if (d + 1 >= us.size() || (m.previo_usuario.size() <= max_bytes && m.previo_asistente.size() <= max_bytes)) break;
+    }
+}
+
 std::vector<std::string> trocear(const std::string & texto, size_t max_chars, size_t min_chars) {
     std::vector<std::string> parrafos, res;
     {
@@ -391,6 +420,40 @@ std::string motor::prefijo(int region, int nivel, int rol) const {
     return p;
 }
 
+// Diccionario de tokens: cada ID en 7 bits por byte (bit alto = continúa), empacado en palabras de 32 bits.
+std::vector<uint32_t> empacar_tokens(const std::vector<llama_token> & t) {
+    std::vector<uint8_t> b;
+    for (llama_token v : t) {
+        uint32_t x = (uint32_t) v;
+        while (x >= 128) { b.push_back((uint8_t) ((x & 127) | 128)); x >>= 7; }
+        b.push_back((uint8_t) x);
+    }
+    std::vector<uint32_t> w((b.size() + 3) / 4, 0);
+    for (size_t i = 0; i < b.size(); ++i) w[i / 4] |= (uint32_t) b[i] << (8 * (i % 4));
+    return w;
+}
+
+bool desempacar_tokens(const codigo & c, int n_vocab, std::vector<llama_token> & t) {
+    t.clear();
+    const size_t nb = 4 * c.palabras.size();
+    size_t i = 0;
+    while ((int) t.size() < c.n_tokens) {
+        uint32_t x = 0;
+        int s = 0;
+        for (;;) {
+            if (i >= nb || s > 28) return false;
+            const uint8_t byte = (uint8_t) (c.palabras[i / 4] >> (8 * (i % 4)));
+            ++i;
+            x |= (uint32_t) (byte & 127) << s;
+            s += 7;
+            if (!(byte & 128)) break;
+        }
+        if ((int) x >= n_vocab) return false;
+        t.push_back((llama_token) x);
+    }
+    return true;
+}
+
 bool motor::codificar(const std::string & pre, const std::string & texto, codigo & out,
                       std::string * texto_tokens, std::vector<std::pair<std::string, double>> * palabras) {
     std::vector<llama_token> tp = tokenizar(pre, true);
@@ -398,6 +461,15 @@ bool motor::codificar(const std::string & pre, const std::string & texto, codigo
     if (t.empty() || tp.empty()) return false;
     if ((int) t.size() > MAX_TOKENS_RECUERDO) t.resize(MAX_TOKENS_RECUERDO);
     if ((int) (tp.size() + t.size()) >= N_CTX_MOTOR) return false;
+
+    // portable sin necesidad de medir sorpresa: ni siquiera se pasa por el modelo
+    if (!con_modelo && !palabras) {
+        out.tokens   = true;
+        out.palabras = empacar_tokens(t);
+        out.n_tokens = (uint8_t) t.size();
+        if (texto_tokens) *texto_tokens = detokenizar(t);
+        return out.palabras.size() <= 255;
+    }
 
     llama_memory_clear(llama_get_memory(ctx), true);
     if (!evaluar(tp)) return false;
@@ -411,9 +483,15 @@ bool motor::codificar(const std::string & pre, const std::string & texto, codigo
         bits.push_back(-std::log2((double) fr / ESCALA));
         if (i + 1 < t.size() && !evaluar({ t[i] })) return false;
     }
-    rans_enc enc;
-    for (size_t k = simbolos.size(); k-- > 0;) enc.poner(simbolos[k].first, simbolos[k].second);
-    out.palabras = enc.terminar();
+    if (con_modelo) {
+        rans_enc enc;
+        for (size_t k = simbolos.size(); k-- > 0;) enc.poner(simbolos[k].first, simbolos[k].second);
+        out.tokens   = false;
+        out.palabras = enc.terminar();
+    } else {
+        out.tokens   = true;   // el modelo solo se usó para medir la sorpresa (claves y pistas)
+        out.palabras = empacar_tokens(t);
+    }
     out.n_tokens = (uint8_t) t.size();
     if (out.palabras.size() > 255) return false;
 
@@ -440,6 +518,12 @@ bool motor::codificar(const std::string & pre, const std::string & texto, codigo
 
 bool motor::decodificar(const std::string & pre, const codigo & c, std::string & out) {
     out.clear();
+    if (c.tokens) { // diccionario de tokens: consulta de tabla, sin modelo
+        std::vector<llama_token> t;
+        if (c.n_tokens == 0 || !desempacar_tokens(c, n_vocab, t)) return false;
+        out = detokenizar(t);
+        return true;
+    }
     if (c.n_tokens == 0 || c.palabras.size() < 2) return false;
     std::vector<llama_token> tp = tokenizar(pre, true);
     llama_memory_clear(llama_get_memory(ctx), true);
@@ -637,7 +721,7 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
     const std::vector<uint16_t> qk = claves_de(consulta);
     const std::set<uint16_t> qs(qk.begin(), qk.end());
 
-    struct cand { memoria * m; size_t i; double score; int hits; };
+    struct cand { memoria * m; size_t i; double score; int hits; bool asociado = false; };
     std::vector<cand> cs;
     size_t total = 0;
     for (auto * m : ms) {
@@ -666,6 +750,30 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
     if (max_hits >= 2) cs.erase(std::remove_if(cs.begin(), cs.end(), [&](auto & c) { return c.hits < max_hits - 1; }), cs.end());
     std::stable_sort(cs.begin(), cs.end(), [](auto & a, auto & b) { return a.score > b.score; });
 
+    // Segundo salto (activación propagada): las claves de los mejores recuerdos directos que la
+    // consulta no tenía activan otros recuerdos. Exige 2+ claves compartidas (una sola puede ser
+    // colisión del hash) y pesa menos que una coincidencia directa: es intuición, no evidencia.
+    if (max_hits > 0) {
+        std::set<uint16_t> q2;
+        for (size_t k = 0; k < cs.size() && k < 3; ++k) {
+            for (auto c : cs[k].m->recuerdos[cs[k].i].claves) if (!qs.count(c)) q2.insert(c);
+        }
+        std::set<std::pair<memoria *, size_t>> ya;
+        for (auto & c : cs) ya.insert({ c.m, c.i });
+        std::vector<cand> sal;
+        for (auto * m : ms) {
+            for (size_t i = 0; i < m->recuerdos.size() && !q2.empty(); ++i) {
+                if (ya.count({ m, i })) continue;
+                int h = 0;
+                for (auto k : m->recuerdos[i].claves) h += q2.count(k);
+                if (h >= 2) sal.push_back({ m, i, 4.0 * h + importancia(m->recuerdos[i]), 0, true });
+            }
+        }
+        std::stable_sort(sal.begin(), sal.end(), [](auto & a, auto & b) { return a.score > b.score; });
+        if (sal.size() > 2) sal.resize(2);
+        cs.insert(cs.end(), sal.begin(), sal.end());
+    }
+
     std::map<int, int> por_region;
     std::string lineas;
     int n = 0;
@@ -677,6 +785,7 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
         if (t.empty()) continue;
         std::string l = "- (" + regs[std::min<size_t>(r.region, regs.size() - 1)].nombre + ", " + nombre_rol(r.rol);
         if (r.nivel != EXACTO) l += std::string(", ") + nombre_nivel(r.nivel);
+        if (c.asociado)        l += ", asociado";
         l += ") " + t + "\n";
         if (lineas.size() + l.size() > max_chars) break;
         lineas += l;
@@ -740,7 +849,7 @@ bool motor::guardar(const memoria & m, const std::string & ruta) const {
     w32(b, (uint32_t) m.recuerdos.size());
     for (auto & r : m.recuerdos) {
         w8(b, r.region);
-        w8(b, (uint8_t) ((r.nivel & 3) | ((r.rol & 3) << 2) | (r.danado ? 16 : 0)));
+        w8(b, (uint8_t) ((r.nivel & 3) | ((r.rol & 3) << 2) | (r.danado ? 16 : 0) | (r.cod.tokens ? 32 : 0)));
         w8(b, r.usos);
         w8(b, r.check);
         w16(b, r.dia);
@@ -794,6 +903,7 @@ bool motor::cargar(memoria & m, const std::string & ruta) const {
         r.nivel  = nr & 3;
         r.rol    = (nr >> 2) & 3;
         r.danado = (nr & 16) != 0;
+        r.cod.tokens = (nr & 32) != 0;   // diccionario de tokens (portable)
         r.usos   = l.r8();
         r.check  = l.r8();
         r.dia    = l.r16();
@@ -819,6 +929,7 @@ servicio::servicio(llama_model * model, const config & c) : cfg(c) {
     std::vector<region> regs = cfg.ruta_regiones.empty() ? regiones_por_defecto() : leer_regiones(cfg.ruta_regiones);
     mot = std::make_unique<motor>(model, cfg.n_threads, regs);
     mot->usar_clave(cfg.clave);
+    mot->usar_codificacion_modelo(cfg.compacta);
     std::error_code ec;
     std::filesystem::create_directories(cfg.directorio, ec);
     biblioteca.presupuesto = cfg.bytes_biblioteca;
@@ -890,8 +1001,12 @@ contexto_recordado servicio::preparar(uint64_t s, const std::string & consulta) 
     std::lock_guard<std::mutex> lk(mtx);
     purgar();
     memoria & m = sesion_mem(s);
-    res.previo_usuario   = m.previo_usuario;
-    res.previo_asistente = m.previo_asistente;
+    const auto us = partir_turnos(m.previo_usuario), as = partir_turnos(m.previo_asistente);
+    if (us.size() == as.size()) {
+        for (size_t i = 0; i < us.size(); ++i) {
+            if (!us[i].empty() && !as[i].empty()) res.turnos.push_back({ us[i], as[i] });
+        }
+    }
     res.bloque = mot->recordar({ &m, &biblioteca }, consulta, cfg.max_recuerdos, cfg.max_chars, &res.n_recuerdos);
     return res;
 }
@@ -904,8 +1019,7 @@ void servicio::registrar_turno(uint64_t s, const std::string & usuario, const st
         const int reg = mot->clasificar(usuario + "\n" + recortar(asistente, 400));
         mot->agregar(m, usuario, reg, USUARIO);
         mot->agregar(m, asistente, reg, ASISTENTE);
-        m.previo_usuario   = recortar(usuario, 1500);
-        m.previo_asistente = recortar(asistente, 1500);
+        anillo_turnos(m, usuario, asistente, cfg.turnos, 3600);   // 3600 < 4000 que admite el archivo
         if (mot->guardar(m, ruta_sesion(s))) m.sucia = false;
         else fprintf(stderr, "%s\n", "[NAI] memoria: no se pudo guardar la sesión");
     });
@@ -985,6 +1099,10 @@ void servicio::bucle() {
             if (salir && cola.empty()) return;
             f = std::move(cola.front());
             cola.pop_front();
+        }
+        // cede el paso a las peticiones en curso (máx. 10 s, luego avanza para no atorar la cola)
+        for (int i = 0; i < 1000 && activas.load() > 0 && !salir; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         try { f(); }
         catch (const std::exception & e) { fprintf(stderr, "[NAI] memoria: error en segundo plano: %s\n", e.what()); }
