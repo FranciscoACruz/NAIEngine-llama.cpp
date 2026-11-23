@@ -1,3 +1,4 @@
+#include "nai-pdf.h" // [NAI] lectura de PDF
 #include "cli-context.h"
 #include "cli-ui.h"
 
@@ -456,6 +457,7 @@ int cli_context::run() {
     banner += "  /clear              clear the chat history\n";
     banner += "  /read <file>        add a text file\n";
     banner += "  /glob <pattern>     add text files using globbing pattern\n";
+    banner += "  /read <archivo.pdf> [NAI] también lee PDF (extrae su texto)\n";
     if (has_vision) banner += "  /image <file>       add an image file\n";
     if (has_audio)  banner += "  /audio <file>       add an audio file\n";
     if (has_video)  banner += "  /video <file>       add a video file\n";
@@ -471,7 +473,17 @@ int cli_context::run() {
             ui::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
             return false;
         }
-        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::string content;
+        if (nai::es_pdf(fname)) { // [NAI] PDF: se pasa su texto, no sus bytes
+            std::string error;
+            if (!nai::pdf_a_texto(fname, content, error)) {
+                ui::show_error(string_format("[NAI] no se pudo leer el PDF '%s': %s", fname.c_str(), error.c_str()));
+                return false;
+            }
+            ui::show_message(string_format("[NAI] PDF '%s': %zu caracteres de texto extraídos", fname.c_str(), content.size()));
+        } else {
+            content.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        }
         cur_msg += "--- File: ";
         cur_msg += fname;
         cur_msg += " ---\n";

@@ -3446,6 +3446,18 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         ? input
         : params.generation_prompt + input;
 
+    // [NAI] Formato de solo contenido: el resultado es el texto tal cual. Analizarlo con la
+    // gramática content(rest) + end fallaba con UTF-8 incompleto (texto cortado a mitad de un
+    // carácter o salida de un modelo pequeño) y el servidor respondía HTTP 500 "does not match
+    // the expected Content-only format", dejando la conversación trabada. El llama.cpp oficial
+    // reescribió esta función; esto equivale para el caso sin parser.
+    if (src_parser.empty()) {
+        common_chat_msg msg;
+        msg.role    = "assistant";
+        msg.content = effective_input;
+        return msg;
+    }
+
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
     common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_LENIENT;

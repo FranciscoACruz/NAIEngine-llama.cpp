@@ -17,10 +17,6 @@
 #include "mtmd-helper.h"
 #include "../../src/llama-ext.h" // [NAI] API de masa semántica / desalojo
 #include "../../src/nai-session-table.hpp" // [NAI] sesiones persistentes
-#include "nai-memoria.h" // [NAI] memoria reconstructiva por regiones
-#include "nai-lector.h"  // [NAI] lectura de documentos y URLs
-#include "nai-cifrado.h" // [NAI] cifrado de sesiones y memorias
-#include "base64.hpp"     // [NAI] archivos enviados a /nai/aprender
 
 #include <algorithm>
 #include <cstddef>
@@ -350,6 +346,7 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        nai_historial_recortado = false; // [NAI]
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -531,6 +528,7 @@ struct server_slot {
     }
 
     std::function<void(const server_slot &)> nai_al_liberar; // [NAI] traza del planificador
+    bool nai_historial_recortado = false;                     // [NAI] el historial se recortó al lanzar
 
     void release() {
         if (is_processing()) {
@@ -921,7 +919,6 @@ struct server_metrics {
 
 struct server_context_impl {
     friend struct server_context;
-    friend struct server_routes; // [NAI] memoria: las rutas usan nai_memoria y nai_handle
 
 public:
     // only use these pointers outside of this class:
@@ -1042,13 +1039,56 @@ private:
         }
     }
 
+    // [NAI] Recorte del historial (--context-shift --nai-desalojo).
+    // El cliente reenvía la conversación completa en cada mensaje; cuando ya no cabe en el contexto
+    // del slot, llama.cpp la rechaza ("request exceeds the available context size") y la conversación
+    // queda trabada. Aquí se recorta a la mitad del contexto conservando el inicio (mensaje de sistema)
+    // y lo más reciente, y se quita la ventana de MENOR MASA SEMÁNTICA dentro del prefijo que el slot ya
+    // tiene en memoria (donde las masas son válidas: suele caer en respuestas viejas y predecibles del
+    // asistente). Sin masas útiles se quita la ventana más antigua tras el inicio.
+    void nai_recortar_historial(server_slot & slot, server_task & task) {
+        if (!params_base.nai_desalojo || !params_base.ctx_shift || task.tokens.has_mtmd) {
+            return;
+        }
+        const int n     = (int) task.tokens.size();
+        const int n_ctx = slot.n_ctx;
+        if (n < n_ctx - 16) {
+            return; // cabe (con un margen mínimo para la respuesta)
+        }
+        const int objetivo = n_ctx / 2; // mitad libre para la respuesta y los turnos siguientes
+        int n_keep = task.params.n_keep > 0 ? task.params.n_keep : std::min(128, n_ctx / 8);
+        if (add_bos_token) {
+            n_keep += 1;
+        }
+        n_keep = std::max(0, std::min(n_keep, objetivo / 2));
+        const int n_discard  = n - objetivo;
+        const int n_reciente = std::max(1, std::min(256, (objetivo - n_keep) / 2));
+        const int n_comun    = (int) slot.prompt.tokens.get_common_prefix(task.tokens);
+
+        int p = n_keep; // ventana por defecto: la más antigua después del inicio
+        const llama_pos q = llama_nai_buscar_ventana_desalojo(ctx_tgt, slot.id, n_keep,
+                                                              std::min(n - n_reciente, n_comun), n_discard);
+        const bool por_masa = q >= n_keep && q + n_discard <= n - n_reciente;
+        if (por_masa) {
+            p = q;
+        }
+
+        const llama_tokens & orig = task.tokens.get_tokens();
+        llama_tokens nuevos;
+        nuevos.reserve(objetivo);
+        nuevos.insert(nuevos.end(), orig.begin(), orig.begin() + p);
+        nuevos.insert(nuevos.end(), orig.begin() + p + n_discard, orig.end());
+        task.tokens = server_tokens(nuevos, false);
+        slot.nai_historial_recortado = true; // se reporta como "truncated" en la respuesta
+
+        SLT_WRN(slot, "[NAI] historial de %d tokens no cabe en %d: se olvidan %d tokens desde la posición %d (%s), quedan %d\n",
+                n, n_ctx, n_discard, p, por_masa ? "ventana de menor masa" : "ventana más antigua", (int) nuevos.size());
+    }
+
     nai::NaiSessionTable nai_tabla;
     std::string          nai_dir;
-    // [NAI] memoria reconstructiva (--nai-memoria). Se lee con std::atomic_load desde los hilos HTTP.
-    std::shared_ptr<nai_mem::servicio> nai_memoria;
     int64_t              nai_ttl = 86400;
     nai::ClaveSesion     nai_clave;   // clave secreta del hash (archivo .nai-clave en nai_dir)
-    nai_cifrado::clave   nai_cla;     // --nai-cifrado: clave de cifrado de los archivos de sesión
 
     uint64_t nai_handle(const std::string & id) const {
         return nai::hash_sesion(id, nai_clave);
@@ -1117,33 +1157,13 @@ private:
             nai_dir.clear();
             return;
         }
-        // [NAI] cifrado en disco (--nai-cifrado)
-        if (!params_base.nai_cifrado.empty()) {
-            std::string aviso;
-            if (!nai_cifrado::cargar_o_crear(params_base.nai_cifrado, nai_cla, aviso)) {
-                SRV_ERR("[NAI] %s; sesiones desactivadas para no guardar conversaciones sin cifrar\n", aviso.c_str());
-                nai_dir.clear();
-                return;
-            }
-            if (!aviso.empty()) {
-                SRV_WRN("[NAI] %s\n", aviso.c_str());
-            }
-            const auto dir_ses = std::filesystem::weakly_canonical(nai_dir, ec);
-            const auto dir_cla = std::filesystem::weakly_canonical(std::filesystem::path(params_base.nai_cifrado).parent_path(), ec);
-            if (!dir_ses.empty() && dir_cla.string().rfind(dir_ses.string(), 0) == 0) {
-                SRV_WRN("%s\n", "[NAI] la clave de cifrado está dentro de la carpeta de sesiones: quien copie la carpeta "
-                                 "se lleva también la clave. Muévela a otro lugar (otro disco, llavero, gestor de secretos)");
-            }
-            SRV_INF("%s\n", "[NAI] sesiones y memorias cifradas con ChaCha20-Poly1305");
-        }
         // recuperar sesiones guardadas antes de reiniciar el servidor (persisten mientras no expiren)
         const int64_t ahora = nai_ahora();
         size_t n_cargadas = 0, n_borradas = 0;
         for (const auto & entrada : std::filesystem::directory_iterator(nai_dir, ec)) {
             const std::string nombre = entrada.path().filename().string();
             uint64_t handle = 0;
-            if (nombre.size() != 24 || nombre.rfind("nai-", 0) != 0 || entrada.path().extension() != ".bin" ||
-                sscanf(nombre.c_str(), "nai-%16" SCNx64, &handle) != 1) {
+            if (nombre.size() != 24 || nombre.rfind("nai-", 0) != 0 || sscanf(nombre.c_str(), "nai-%16" SCNx64 ".bin", &handle) != 1) {
                 continue;
             }
             const auto ftime = std::filesystem::last_write_time(entrada.path(), ec);
@@ -1184,63 +1204,8 @@ private:
     }
 
     // Antes de procesar la tarea: deja en el slot el estado de la sesión, si existe.
-    // [NAI] Sesión cifrada: "NKV1" | n_tokens (u32) | tokens | estado del KV, todo cifrado con ChaCha20-Poly1305.
-    // El nombre del archivo va en los datos asociados: no se puede cambiar de sesión copiando archivos.
-    size_t nai_guardar_cifrado(const std::string & tmp, const std::string & nombre, llama_seq_id seq,
-                               const llama_tokens & tokens, size_t n_tokens) {
-        const size_t n_estado = llama_state_seq_get_size(ctx_tgt, seq);
-        std::string plano = "NKV1";
-        const uint32_t n = (uint32_t) n_tokens;
-        plano.append((const char *) &n, sizeof(n));
-        plano.append((const char *) tokens.data(), n_tokens * sizeof(llama_token));
-        const size_t base = plano.size();
-        plano.resize(base + n_estado);
-        const size_t escritos = llama_state_seq_get_data(ctx_tgt, (uint8_t *) plano.data() + base, n_estado, seq);
-        if (escritos == 0) {
-            return 0;
-        }
-        plano.resize(base + escritos);
-        const std::string cifrado = nai_cifrado::cifrar(nai_cla, plano, nombre);
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f || !f.write(cifrado.data(), (std::streamsize) cifrado.size())) {
-            return 0;
-        }
-        return cifrado.size();
-    }
-
-    size_t nai_cargar_cifrado(const std::string & ruta, llama_seq_id seq, llama_tokens & tokens, size_t & n_tokens) {
-        std::ifstream f(ruta, std::ios::binary);
-        if (!f) {
-            return 0;
-        }
-        const std::string archivo((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        std::string plano;
-        if (!nai_cifrado::descifrar(nai_cla, archivo, std::filesystem::path(ruta).filename().string(), plano)) {
-            SRV_WRN("%s\n", "[NAI] no se pudo descifrar la sesión (otra clave, archivo sin cifrar o alterado)");
-            return 0;
-        }
-        if (plano.size() < 8 || plano.compare(0, 4, "NKV1") != 0) {
-            return 0;
-        }
-        uint32_t n = 0;
-        memcpy(&n, plano.data() + 4, sizeof(n));
-        const size_t base = 8 + (size_t) n * sizeof(llama_token);
-        if (n > tokens.size() || base > plano.size()) {
-            return 0;
-        }
-        memcpy(tokens.data(), plano.data() + 8, (size_t) n * sizeof(llama_token));
-        n_tokens = n;
-        const size_t leidos = llama_state_seq_set_data(ctx_tgt, (const uint8_t *) plano.data() + base, plano.size() - base, seq);
-        return leidos == 0 ? 0 : archivo.size();
-    }
-
     void nai_preparar_slot(server_slot & slot, const server_task & task) {
         if (nai_dir.empty() || task.is_child()) {
-            return;
-        }
-        if (nai_memoria) {
-            // con memoria reconstructiva no se guarda ni se restaura el KV de la conversación
-            slot.nai_sesion.clear();
             return;
         }
         const std::string & id = task.params.nai_session;
@@ -1278,9 +1243,7 @@ private:
         const int64_t t0 = ggml_time_us();
         llama_tokens tokens(slot.n_ctx);
         size_t n_tokens = 0;
-        const size_t n_leidos = nai_cla.activa
-            ? nai_cargar_cifrado(ruta, slot.id, tokens, n_tokens)
-            : llama_state_seq_load_file(ctx_tgt, ruta.c_str(), slot.id, tokens.data(), tokens.size(), &n_tokens);
+        const size_t n_leidos = llama_state_seq_load_file(ctx_tgt, ruta.c_str(), slot.id, tokens.data(), tokens.size(), &n_tokens);
         if (n_leidos == 0) {
             SLT_WRN(slot, "[NAI] no se pudo restaurar la sesión %s (archivo ausente o inválido)\n", etiqueta.c_str());
             slot.prompt.clear();
@@ -1324,9 +1287,7 @@ private:
         const std::string ruta = nai_ruta(handle);
         const std::string tmp  = ruta + ".tmp";
         const int64_t t0 = ggml_time_us();
-        const size_t n_escritos = nai_cla.activa
-            ? nai_guardar_cifrado(tmp, std::filesystem::path(ruta).filename().string(), slot.id, tokens, n_guardar)
-            : llama_state_seq_save_file(ctx_tgt, tmp.c_str(), slot.id, tokens.data(), n_guardar);
+        const size_t n_escritos = llama_state_seq_save_file(ctx_tgt, tmp.c_str(), slot.id, tokens.data(), n_guardar);
         std::error_code ec;
         if (n_escritos == 0) {
             std::filesystem::remove(tmp, ec);
@@ -1401,7 +1362,6 @@ private:
         ctx_dft   = nullptr;
         model_dft = nullptr;
 
-        std::atomic_store(&nai_memoria, std::shared_ptr<nai_mem::servicio>()); // [NAI] antes de liberar el modelo
         llama_init.reset();
 
         ctx_tgt = nullptr;
@@ -1642,30 +1602,6 @@ private:
 
         // [NAI] sesiones persistentes
         nai_sesiones_init();
-
-        // [NAI] memoria reconstructiva por regiones
-        if (params_base.nai_memoria) {
-            if (nai_dir.empty()) {
-                SRV_WRN("%s\n", "[NAI] --nai-memoria requiere --nai-sesiones DIR; la memoria queda desactivada");
-            } else {
-                nai_mem::servicio::config cfg;
-                cfg.directorio       = nai_dir;
-                cfg.bytes_sesion     = (size_t) params_base.nai_memoria_bytes;
-                cfg.bytes_biblioteca = (size_t) params_base.nai_biblioteca_bytes;
-                cfg.ttl_seg          = params_base.nai_sesion_ttl;
-                cfg.n_threads        = params_base.cpuparams.n_threads;
-                cfg.ruta_regiones    = params_base.nai_regiones;
-                cfg.clave            = nai_cla;
-                auto mem = std::make_shared<nai_mem::servicio>(model_tgt, cfg);
-                if (mem->ok()) {
-                    std::atomic_store(&nai_memoria, mem);
-                    SRV_INF("[NAI] memoria activa: %lld B por sesión, biblioteca de %lld B, en '%s'\n",
-                            (long long) cfg.bytes_sesion, (long long) cfg.bytes_biblioteca, nai_dir.c_str());
-                } else {
-                    SRV_WRN("%s\n", "[NAI] no se pudo crear el contexto de la memoria; queda desactivada");
-                }
-            }
-        }
 
         vocab = llama_model_get_vocab(model_tgt);
 
@@ -2282,6 +2218,9 @@ private:
         // [NAI] cargar en el slot la conversación de la sesión (si existe y no expiró)
         nai_preparar_slot(slot, task);
 
+        // [NAI] si el historial ya no cabe, recortarlo eligiendo qué olvidar (en lugar de rechazarlo)
+        nai_recortar_historial(slot, task);
+
         // initialize samplers
         if (task.need_sampling()) {
             try {
@@ -2611,15 +2550,6 @@ private:
             slot.debug_generated_text = slot.generated_text;
         }
 
-        // [NAI] memoria: guardar el turno (asíncrono) antes de mover el texto generado
-        if (nai_memoria && !slot.task->is_child() && !slot.task->params.nai_session.empty() &&
-            !slot.task->params.nai_mem_usuario.empty()) {
-            nai_memoria->registrar_turno(nai_handle(slot.task->params.nai_session),
-                                         slot.task->params.nai_mem_usuario, slot.generated_text);
-            SLT_INF(slot, "[NAI] memoria: turno de la sesión %s en cola para guardarse\n",
-                    nai_etiqueta(slot.task->params.nai_session).c_str());
-        }
-
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
             res->content     = "";
@@ -2632,7 +2562,7 @@ private:
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);
         res->response_fields = std::move(slot.task->params.response_fields);
 
-        res->truncated             = slot.truncated;
+        res->truncated             = slot.truncated || slot.nai_historial_recortado;
         res->n_decoded             = slot.n_decoded;
         res->n_prompt_tokens       = slot.task->n_tokens();
         res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
@@ -4663,7 +4593,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             task.id_slot = json_value(data, "id_slot", -1);
             task.params.nai_session = json_value(data, "nai_session", std::string()); // [NAI]
-            task.params.nai_mem_usuario = json_value(data, "nai_mem_usuario", std::string()); // [NAI]
             sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat
@@ -4875,66 +4804,6 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
           queue_tasks(ctx_server.impl->queue_tasks),
           queue_results(ctx_server.impl->queue_results) {
     init_routes();
-}
-
-// [NAI] Memoria reconstructiva: arma los mensajes de la petición con la memoria de la sesión.
-// El contexto lleva solo: sistema (+ recuerdos relevantes), el turno anterior y el mensaje actual.
-// La conversación vieja ya no viaja en tokens: está en la memoria de tamaño fijo.
-static std::string nai_texto_mensaje(const json & contenido) {
-    if (contenido.is_string()) {
-        return contenido.get<std::string>();
-    }
-    std::string t;
-    if (contenido.is_array()) {
-        for (const auto & p : contenido) {
-            if (p.is_object() && json_value(p, "type", std::string()) == "text") {
-                t += (t.empty() ? "" : "\n") + json_value(p, "text", std::string());
-            }
-        }
-    }
-    return t;
-}
-
-static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json & body) {
-    if (!body.contains("messages") || !body.at("messages").is_array()) {
-        return;
-    }
-    const json & msgs = body.at("messages");
-    int idx = -1;
-    for (int i = (int) msgs.size() - 1; i >= 0; --i) {
-        if (json_value(msgs[i], "role", std::string()) == "user") { idx = i; break; }
-    }
-    if (idx < 0) {
-        return;
-    }
-    const std::string usuario = nai_texto_mensaje(msgs[idx].contains("content") ? msgs[idx].at("content") : json());
-    if (usuario.empty()) {
-        return;
-    }
-    std::string sistema;
-    for (const auto & m : msgs) {
-        const std::string rol = json_value(m, "role", std::string());
-        if (rol == "system" || rol == "developer") {
-            sistema += (sistema.empty() ? "" : "\n") + nai_texto_mensaje(m.contains("content") ? m.at("content") : json());
-        }
-    }
-    const nai_mem::contexto_recordado rec = mem.preparar(sesion, usuario);
-    if (!rec.bloque.empty()) {
-        sistema += (sistema.empty() ? "" : "\n\n") + rec.bloque;
-    }
-    json nuevos = json::array();
-    if (!sistema.empty()) {
-        nuevos.push_back({ { "role", "system" }, { "content", sistema } });
-    }
-    if (!rec.previo_usuario.empty() && !rec.previo_asistente.empty()) {
-        nuevos.push_back({ { "role", "user" },      { "content", rec.previo_usuario } });
-        nuevos.push_back({ { "role", "assistant" }, { "content", rec.previo_asistente } });
-    }
-    nuevos.push_back(msgs[idx]);
-    SRV_INF("[NAI] memoria: %d recuerdos, %zu mensajes recibidos -> %zu enviados al modelo\n",
-            rec.n_recuerdos, msgs.size(), nuevos.size());
-    body["messages"]        = std::move(nuevos);
-    body["nai_mem_usuario"] = usuario;
 }
 
 void server_routes::init_routes() {
@@ -5328,13 +5197,6 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = json::parse(req.body);
-        // [NAI] memoria reconstructiva: solo con sesión
-        if (auto mem = std::atomic_load(&ctx_server.nai_memoria)) {
-            const std::string id = json_value(body, "nai_session", std::string());
-            if (!id.empty()) {
-                nai_preparar_mensajes(*mem, ctx_server.nai_handle(id), body);
-            }
-        }
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
@@ -5345,79 +5207,6 @@ void server_routes::init_routes() {
             body_parsed,
             files,
             TASK_RESPONSE_TYPE_OAI_CHAT);
-    };
-
-    // [NAI] Aprender un documento en la biblioteca: {"texto": ...} | {"url": ...} | {"archivo": base64, "nombre": ...}
-    //       "region" opcional: si la fuente ya sabe su tema, no se clasifica con el modelo
-    this->post_nai_aprender = [this](const server_http_req & req) {
-        auto res = create_response();
-        auto mem = std::atomic_load(&ctx_server.nai_memoria);
-        if (!mem) {
-            res->error(format_error_response("La memoria NAI no está activa. Inicia el servidor con --nai-memoria --nai-sesiones DIR",
-                                             ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-        const json body = json::parse(req.body);
-        nai_lector::resultado lr;
-        std::string fuente = json_value(body, "fuente", std::string());
-        if (body.contains("texto")) {
-            lr.ok = true;
-            lr.tipo = "texto";
-            lr.texto = json_value(body, "texto", std::string());
-        } else if (body.contains("url")) {
-            fuente = fuente.empty() ? json_value(body, "url", std::string()) : fuente;
-            lr = nai_lector::leer_url(json_value(body, "url", std::string()), params.nai_lector_red_local);
-        } else if (body.contains("archivo")) {
-            const std::string nombre = json_value(body, "nombre", std::string("documento.txt"));
-            fuente = fuente.empty() ? nombre : fuente;
-            std::string bytes;
-            try {
-                bytes = base64::decode(json_value(body, "archivo", std::string()));
-            } catch (const std::exception &) {
-                res->error(format_error_response("\"archivo\" debe venir en base64", ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            }
-            lr = nai_lector::leer_bytes(nombre, bytes);
-        } else {
-            res->error(format_error_response("Envía \"texto\", \"url\" o \"archivo\" (base64) con \"nombre\"", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        if (!lr.ok || lr.texto.empty()) {
-            res->error(format_error_response("No se pudo leer el documento: " + (lr.error.empty() ? std::string("vacío") : lr.error),
-                                             ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        // páginas casi vacías (inicio de sesión, aviso de cookies, error): no se aprenden
-        const int64_t minimo = json_value(body, "min_caracteres", (int64_t) 0);
-        if (minimo > 0 && (int64_t) lr.texto.size() < minimo) {
-            res->error(format_error_response("El documento tiene muy poco texto útil (" + std::to_string(lr.texto.size()) +
-                                             " caracteres; mínimo " + std::to_string(minimo) + ")", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        const std::string region = json_value(body, "region", std::string());
-        if (!region.empty() && mem->indice_region(region) < 0) {
-            res->error(format_error_response("La región '" + region + "' no existe", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        const int n = mem->aprender(lr.texto, fuente, region);
-        SRV_INF("[NAI] aprender: %s (%s), %zu caracteres -> %d trozos en cola\n",
-                fuente.c_str(), lr.tipo.c_str(), lr.texto.size(), n);
-        res->ok({ { "aprendiendo", n }, { "caracteres", lr.texto.size() }, { "tipo", lr.tipo }, { "fuente", fuente },
-                  { "nota", "se procesa en segundo plano; consulta GET /nai/memoria para ver el avance" } });
-        return res;
-    };
-
-    // [NAI] Estado de la memoria: biblioteca, sesiones en RAM y trabajo pendiente
-    this->get_nai_memoria = [this](const server_http_req &) {
-        auto res = create_response();
-        auto mem = std::atomic_load(&ctx_server.nai_memoria);
-        if (!mem) {
-            res->error(format_error_response("La memoria NAI no está activa. Inicia el servidor con --nai-memoria --nai-sesiones DIR",
-                                             ERROR_TYPE_NOT_SUPPORTED));
-            return res;
-        }
-        res->ok(json::parse(mem->estado_json()));
-        return res;
     };
 
     this->post_chat_completions_tok = [this](const server_http_req & req) {

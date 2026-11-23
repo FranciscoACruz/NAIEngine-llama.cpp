@@ -9,9 +9,6 @@
 #include "../src/nai-telemetry-hub.hpp"
 #include "../common/TriageWrapper.h"
 #include "../src/nai-session-table.hpp"
-#include "../common/nai-memoria.h"
-#include "../common/nai-lector.h"
-#include "../common/nai-cifrado.h"
 
 #include <atomic>
 #include <chrono>
@@ -283,101 +280,8 @@ static void test_sesiones() {
     std::printf("[test-nai] sesiones OK (capacidad final %zu)\n", t.capacidad());
 }
 
-// [NAI] Memoria v3: claves (GPS), troceo de documentos y lectura de HTML. No requiere modelo.
-static void test_memoria() {
-    using namespace nai_mem;
-    // misma raíz y sin acentos: "ahorros" y "ahorró" llevan a "ahorro"
-    NAI_CHECK(clave_palabra("ahorros") == clave_palabra("Ahorró"));
-    NAI_CHECK(clave_palabra("Cinchona") == clave_palabra("cinchona"));
-    // relleno y palabras cortas no son claves
-    NAI_CHECK(clave_palabra("porque") == 0 && clave_palabra("con") == 0 && clave_palabra("Cuándo") == 0);
-    // los signos ¿ ¡ « » no se pegan a las palabras
-    NAI_CHECK(claves_de("¿Qué remedio?") == claves_de("Qué remedio"));
-    NAI_CHECK(claves_de("«quinina»").size() == 1 && claves_de("«quinina»")[0] == clave_palabra("quinina"));
-    // colisión detectada antes de mezclar los bits del hash
-    NAI_CHECK(clave_palabra("perdió") != clave_palabra("quincena"));
-    // claves sin repetir
-    NAI_CHECK(claves_de("lápiz lápiz LÁPIZ").size() == 1);
-
-    // troceo: párrafos y oraciones, ningún trozo excede el máximo, nada se pierde
-    std::string largo;
-    for (int i = 0; i < 40; ++i) largo += "La oración número " + std::to_string(i) + " habla del suelo y del agua. ";
-    const std::string doc = "Primer párrafo corto sobre la milpa y el frijol.\n\n" + largo + "\n\nÚltimo párrafo sobre las abejas.";
-    const auto trozos = trocear(doc, 300, 10);
-    NAI_CHECK(trozos.size() >= 4);
-    size_t total = 0;
-    for (auto & t : trozos) { NAI_CHECK(t.size() <= 300); total += t.size(); }
-    NAI_CHECK(trozos.front().find("milpa") != std::string::npos);
-    NAI_CHECK(trozos.back().find("abejas") != std::string::npos);
-    NAI_CHECK(total + 60 >= doc.size() - 6); // solo se pierden espacios entre trozos
-    NAI_CHECK(trocear("corto", 300, 10).empty()); // menos que el mínimo
-
-    // HTML: sin script, estilo ni comentarios; entidades decodificadas; párrafos separados
-    const std::string t = nai_lector::html_a_texto(
-        "<html><head><title>x</title><style>p{}</style></head><body><script>var a=1;</script>"
-        "<p>Ma&iacute;z &amp; frijol</p><!-- oculto --><p>Caf&#233; &#x41;</p></body></html>");
-    NAI_CHECK(t.find("Maíz & frijol") != std::string::npos);
-    NAI_CHECK(t.find("Café A") != std::string::npos);
-    NAI_CHECK(t.find("var a") == std::string::npos && t.find("oculto") == std::string::npos && t.find("p{}") == std::string::npos);
-
-    // páginas web: se prefiere <article>; menús, pies y líneas sueltas se descartan
-    std::string art;
-    for (int i = 0; i < 12; ++i) art += "<p>La rotación de cultivos mantiene la fertilidad del suelo y reduce las plagas en la parcela.</p>";
-    const auto web = nai_lector::leer_bytes("pagina.html", "<html><body><nav><a>Inicio</a> <a>Tienda</a></nav><div>Suscríbete ya</div>"
-        "<article>" + art + "</article><footer>Todos los derechos reservados 2026 empresa ejemplo con aviso legal largo</footer></body></html>");
-    NAI_CHECK(web.ok && web.texto.find("rotación de cultivos") != std::string::npos);
-    NAI_CHECK(web.texto.find("Tienda") == std::string::npos && web.texto.find("Suscríbete") == std::string::npos &&
-              web.texto.find("derechos reservados") == std::string::npos);
-    NAI_CHECK(nai_lector::limpiar_web("Inicio\nUna línea con suficientes palabras para ser contenido real.\nOK\n") ==
-              "Una línea con suficientes palabras para ser contenido real.\n");
-
-    // lector: texto Latin-1 se convierte a UTF-8; binarios se rechazan
-    const auto r1 = nai_lector::leer_bytes("notas.txt", std::string("ma\xEDz"));
-    NAI_CHECK(r1.ok && r1.texto == "maíz");
-    const auto r2 = nai_lector::leer_bytes("dato.bin", std::string("ab\0cd", 5));
-    NAI_CHECK(!r2.ok);
-    std::printf("[test-nai] memoria v3 OK (%zu trozos)\n", trozos.size());
-}
-
-// [NAI] Cifrado: vector oficial RFC 8439 §2.8.2 (ChaCha20-Poly1305), alteraciones y contexto.
-static void test_cifrado() {
-    auto hex = [](const std::string & h) { std::string r; for (size_t i = 0; i + 1 < h.size(); i += 2) r += (char) std::stoi(h.substr(i, 2), nullptr, 16); return r; };
-    uint8_t key[32];
-    for (int i = 0; i < 32; ++i) key[i] = (uint8_t) (0x80 + i);
-    const std::string nonce = hex("070000004041424344454647"), aad = hex("50515253c0c1c2c3c4c5c6c7");
-    std::string m = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
-    const std::string original = m;
-    uint8_t tag[16];
-    nai_cifrado::sellar(key, (const uint8_t *) nonce.data(), (const uint8_t *) aad.data(), aad.size(), (uint8_t *) m.data(), m.size(), tag);
-    NAI_CHECK(m.substr(0, 16) == hex("d31a8d34648e60db7b86afbc53ef7ec2"));
-    NAI_CHECK(std::string((const char *) tag, 16) == hex("1ae10b594f09e26a7e902ecbd0600691"));
-    std::string c = m;
-    NAI_CHECK(nai_cifrado::abrir(key, (const uint8_t *) nonce.data(), (const uint8_t *) aad.data(), aad.size(), (uint8_t *) c.data(), c.size(), tag));
-    NAI_CHECK(c == original);
-    c = m; c[5] ^= 1; // un bit alterado
-    NAI_CHECK(!nai_cifrado::abrir(key, (const uint8_t *) nonce.data(), (const uint8_t *) aad.data(), aad.size(), (uint8_t *) c.data(), c.size(), tag));
-
-    // archivo completo: contexto (nombre) incorrecto, otra clave o alteración -> no descifra
-    nai_cifrado::clave k1, k2;
-    for (int i = 0; i < 32; ++i) { k1.k[i] = (uint8_t) i; k2.k[i] = (uint8_t) (i + 1); }
-    k1.activa = k2.activa = true;
-    const std::string plano = "Usuario: ahorro 400 pesos cada quincena";
-    const std::string arch = nai_cifrado::cifrar(k1, plano, "nai-0001.mem");
-    std::string out;
-    NAI_CHECK(nai_cifrado::es_cifrado(arch) && arch.find("ahorro") == std::string::npos);
-    NAI_CHECK(nai_cifrado::descifrar(k1, arch, "nai-0001.mem", out) && out == plano);
-    NAI_CHECK(!nai_cifrado::descifrar(k1, arch, "nai-0002.mem", out));
-    NAI_CHECK(!nai_cifrado::descifrar(k2, arch, "nai-0001.mem", out));
-    std::string alterado = arch; alterado[20] ^= 0x40;
-    NAI_CHECK(!nai_cifrado::descifrar(k1, alterado, "nai-0001.mem", out));
-    NAI_CHECK(nai_cifrado::cifrar(k1, plano, "x") != nai_cifrado::cifrar(k1, plano, "x")); // nonce aleatorio
-    std::printf("%s\n", "[test-nai] cifrado OK (RFC 8439)");
-}
-
 int main() {
     test_entropia();
-    test_memoria();
-    test_cifrado();
     test_sorpresa();
     test_pendientes();
     test_mapa_masa();

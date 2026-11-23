@@ -1,3 +1,4 @@
+#include "nai-pdf.h" // [NAI] lectura de PDF
 #include "server-tools.h"
 
 #include "subproc.h"
@@ -484,7 +485,7 @@ struct server_tool_read_file : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Read the contents of a file. Optionally specify a 1-based line range. "
+                {"description", "Read the contents of a file (PDF files are converted to text). Optionally specify a 1-based line range. "
                                 "If append_loc is true, each line is prefixed with its line number (e.g. \"1\u2192...\")."},
                 {"parameters", {
                     {"type", "object"},
@@ -512,14 +513,19 @@ struct server_tool_read_file : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
-        if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1) {
+        if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1 && !nai::es_pdf(io->resolve(path))) {
             return {{"error", string_format(
                 "file too large (%zu bytes, max %zu). Use start_line/end_line to read a portion.",
                 (size_t)file_size, SERVER_TOOL_READ_FILE_MAX_SIZE)}};
         }
 
         std::string content;
-        if (!io->read_file(path, content)) {
+        if (nai::es_pdf(io->resolve(path))) { // [NAI] PDF: se lee su texto, no sus bytes
+            std::string error;
+            if (!nai::pdf_a_texto(io->resolve(path), content, error)) {
+                return {{"error", "cannot read PDF " + path + ": " + error}};
+            }
+        } else if (!io->read_file(path, content)) {
             return {{"error", "failed to open file: " + path}};
         }
 
