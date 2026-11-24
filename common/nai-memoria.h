@@ -24,6 +24,7 @@
 #include "llama.h"
 #include "nai-cifrado.h"
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -60,6 +61,8 @@ const char * nombre_rol(int r);
 const char * nombre_naturaleza(int n);
 // Patrones de inyección de instrucciones (texto normalizado, sin acentos). Determinista y sin modelo.
 bool parece_manipulacion(const std::string & texto);
+// Sintaxis de código evidente (bloques ```, #include, def, =>, etiquetas...). Determinista y sin modelo.
+bool parece_codigo(const std::string & texto);
 
 // Texto codificado. Dos métodos:
 //   tokens (portable, por defecto): IDs de token del vocabulario en enteros de longitud variable.
@@ -79,6 +82,11 @@ struct codigo {
 std::vector<uint32_t> empacar_tokens(const std::vector<llama_token> & t);
 bool                  desempacar_tokens(const codigo & c, int n_vocab, std::vector<llama_token> & t);
 
+// Firma de significado: 256 bits (SimHash del vector del hipocampo). La similitud se estima con
+// popcount: cos(pi * bits distintos / 256). 32 bytes por recuerdo en lugar de 4 KB de floats.
+using firma = std::array<uint64_t, 4>;
+double similitud(const firma & a, const firma & b);
+
 struct recuerdo {
     uint8_t               region = 0;
     uint8_t               nivel  = EXACTO;
@@ -91,9 +99,11 @@ struct recuerdo {
     codigo                cod;
     std::string           cache;        // texto reconstruido (solo en RAM, no se guarda)
     bool                  danado = false;
+    bool                  con_firma = false;
+    firma                 fir{};        // significado (hipocampo); vale si con_firma
 
     // región, nivel+rol, usos, check, día (2), n_claves + claves + código
-    size_t bytes() const { return 7 + 2 * claves.size() + cod.bytes(); }
+    size_t bytes() const { return 7 + 2 * claves.size() + cod.bytes() + (con_firma ? 32 : 0); }
 };
 
 struct memoria {
@@ -102,6 +112,7 @@ struct memoria {
     // (separados por SEP_TURNO; un .mem anterior sin separador se lee como un solo turno).
     std::string           previo_usuario;
     std::string           previo_asistente;
+    uint64_t              hip_id      = 0;     // hipocampo que calculó las firmas (0 = ninguno)
     size_t                presupuesto = 16384;
     bool                  sucia       = false;
     int64_t               t_acceso    = 0;
@@ -125,6 +136,27 @@ struct contexto_recordado {
 
 // Motor: un contexto propio del modelo para codificar, decodificar, clasificar y resumir.
 // No es thread-safe; el servicio lo protege con un mutex.
+// Hipocampo: un modelo de embeddings que convierte un texto en su firma de significado.
+// Sirve cualquier modelo de embeddings en GGUF; Qwen3-Embedding usa la instrucción de consulta.
+// No es thread-safe: el servicio lo usa bajo su mutex.
+class hipocampo {
+public:
+    hipocampo(llama_model * model, int n_threads);
+    ~hipocampo();
+    bool ok() const { return ctx != nullptr; }
+    uint64_t id() const { return id_; }
+    // consulta = true: el texto es una pregunta (se le antepone la instrucción de búsqueda)
+    bool firmar(const std::string & texto, bool consulta, firma & out);
+
+private:
+    llama_model *       model = nullptr;
+    const llama_vocab * vocab = nullptr;
+    llama_context *     ctx   = nullptr;
+    int                 n_embd = 0;
+    uint64_t            id_ = 0;
+    std::vector<float>  proy;   // 256 x n_embd, signos aleatorios fijos (SimHash)
+};
+
 class motor {
 public:
     motor(llama_model * model, int n_threads, std::vector<region> regiones);
@@ -156,6 +188,9 @@ public:
     // Guardián: naturaleza de un texto (patrones para manipulación; predicción para las otras tres).
     int naturaleza_de(const std::string & texto);
     size_t rechazados() const { return n_rechazados; }   // documentos no guardados por manipulación
+    // ¿La pregunta es de programación o ciberseguridad técnica? Sintaxis evidente, o la predicción
+    // con margen amplio (conservador: ante la duda, responde el principal).
+    bool es_pregunta_de_codigo(const std::string & texto);
     std::vector<double> puntuar_prediccion(const std::string & texto);
     // log p(texto | prefijo_i) - log p(texto | sin prefijo), primeros 32 tokens; base de ambos clasificadores
     std::vector<double> puntuar_prefijos(const std::vector<std::string> & prefijos, const std::string & texto);
@@ -174,6 +209,11 @@ public:
     void usar_clave(const nai_cifrado::clave & c) { cla = c; }
     // true = codificar con el modelo (compacto, ligado al entorno); false = diccionario de tokens (portable)
     void usar_codificacion_modelo(bool si) { con_modelo = si; }
+    // hipocampo opcional: firmas de significado al guardar y búsqueda por significado al recordar
+    void usar_hipocampo(hipocampo * h, float umbral) { hip = h; umbral_hip = umbral; }
+    hipocampo * hipocampo_activo() const { return hip; }
+    // Calcula las firmas que falten (recuerdos anteriores al hipocampo). Devuelve cuántas quedan.
+    size_t rellenar_firmas(memoria & m, size_t max);
     bool guardar(const memoria & m, const std::string & ruta) const;
     bool cargar(memoria & m, const std::string & ruta) const;
 
@@ -197,8 +237,11 @@ private:
     int                 n_vocab = 0;
     std::vector<region> regs;
     uint64_t            huella_ = 0;
+    uint64_t            huella_vieja_ = 0;   // formato anterior, aceptada al cargar
     nai_cifrado::clave  cla;
     bool                con_modelo = false;
+    hipocampo *         hip = nullptr;
+    float               umbral_hip = 0.5f;
     std::vector<uint32_t> cum;
     std::vector<llama_token> en_kv;   // tokens que hay ahora en el KV: el prefijo común se reutiliza
     std::vector<double>      calib;   // puntaje de cada región con texto vacío
@@ -230,12 +273,15 @@ public:
         std::string ruta_regiones;                  // vacío = regiones por defecto
         nai_cifrado::clave clave;                   // activa = cifrar los .mem
         bool        compacta         = false;       // true = codificar con el modelo (no portable)
+        llama_model * modelo_hipocampo = nullptr;   // embeddings (opcional): relacionar por significado
+        float       umbral_hipocampo = 0.5f;
     };
 
     servicio(llama_model * model, const config & cfg);
     ~servicio();
     bool ok() const { return mot && mot->ok(); }
     int  turnos() const { return cfg.turnos; }
+    bool es_pregunta_de_codigo(const std::string & texto);   // para enviar al especialista
 
     // Antes de responder (sincrónico): recuerdos relevantes + turno anterior.
     contexto_recordado preparar(uint64_t sesion, const std::string & consulta);
@@ -259,10 +305,12 @@ private:
     memoria & sesion_mem(uint64_t sesion);   // requiere mtx
     std::string ruta_sesion(uint64_t sesion) const;
     void purgar();                           // requiere mtx
+    void rellenar(uint64_t sesion, bool es_biblioteca);   // firmas faltantes, en tandas (en la cola)
     void encolar(std::function<void()> f);
     void bucle();
 
     config                           cfg;
+    std::unique_ptr<hipocampo>       hip;     // antes que mot: se destruye después
     std::unique_ptr<motor>           mot;
     std::mutex                       mtx;     // protege motor y memorias
     std::map<uint64_t, memoria>      sesiones;

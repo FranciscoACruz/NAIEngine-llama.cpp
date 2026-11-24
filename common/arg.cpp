@@ -1749,6 +1749,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_MEMORIA"));
     add_opt(common_arg(
+        {"--nai-cerebelo"}, "FNAME",
+        "[NAI] modelo chico (p. ej. Qwen3-0.6B) que se encarga de la memoria, el guardián y la clasificación; "
+        "el modelo principal queda solo para conversar. Sin este flag, el principal hace todo. Para usarlo "
+        "también como borrador especulativo, pásalo además con -md (misma familia que el principal)",
+        [](common_params & params, const std::string & value) {
+            params.nai_cerebelo = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_CEREBELO"));
+    add_opt(common_arg(
+        {"--nai-especialista"}, "URL",
+        "[NAI] llama-server especialista en código (p. ej. http://localhost:8081 con Qwen2.5-Coder): las "
+        "preguntas de programación o ciberseguridad técnica se le envían. Si no está corriendo, responde "
+        "el modelo principal",
+        [](common_params & params, const std::string & value) {
+            params.nai_especialista = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_ESPECIALISTA"));
+    add_opt(common_arg(
+        {"--nai-hipocampo"}, "FNAME",
+        "[NAI] modelo de embeddings (p. ej. Qwen3-Embedding-0.6B) para relacionar recuerdos por significado, "
+        "además de por palabras clave. Cada recuerdo guarda una firma de 32 bytes",
+        [](common_params & params, const std::string & value) {
+            params.nai_hipocampo = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_HIPOCAMPO"));
+    add_opt(common_arg(
+        {"--nai-hipocampo-umbral"}, "F",
+        string_format("[NAI] similitud mínima (0 a 1) para que el hipocampo traiga un recuerdo que no comparte "
+                      "palabras con la pregunta (default: %.2f)", (double) params.nai_hipocampo_umbral),
+        [](common_params & params, const std::string & value) {
+            params.nai_hipocampo_umbral = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_HIPOCAMPO_UMBRAL"));
+    add_opt(common_arg(
         {"--nai-sesion-defecto"}, "ID",
         string_format("[NAI] sesión de memoria para los clientes que no mandan nai_session (interfaz web, "
                       "clientes OpenAI); vacío = esos clientes no usan memoria (default: %s)", params.nai_sesion_defecto.c_str()),

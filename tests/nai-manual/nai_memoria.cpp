@@ -10,6 +10,7 @@
 //
 // Uso:
 //   nai_memoria -m modelo.gguf [-t 4] [--memoria BYTES] [-c "lápiz"] [-f recuerdos.txt] [--compacta] [--diag]
+//   nai_memoria -m modelo.gguf --hipocampo emb.gguf   (solo calibra --nai-hipocampo-umbral)
 //               [--aprender archivo|URL] [--consulta "pregunta"] [--guardar mem.bin] [--cargar mem.bin]
 //               [-r regiones.txt] [--escribir-regiones regiones.txt]
 //   nai_memoria -m modelo.gguf --cargar DIR/biblioteca.mem --exportar recuerdos.jsonl [-r regiones.txt]
@@ -104,6 +105,7 @@ int main(int argc, char ** argv) {
     int n_threads = 4;
     bool compacta = false; // [NAI] --compacta: codificar con el modelo
     bool diag     = false; // [NAI] --diag: por qué el clasificador elige cada región
+    std::string ruta_hip;  // [NAI] --hipocampo: calibrar el umbral de similitud
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto sig = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -121,6 +123,7 @@ int main(int argc, char ** argv) {
         else if (a == "--clave") ruta_clave = sig();
         else if (a == "--compacta") compacta = true;
         else if (a == "--diag") diag = true;
+        else if (a == "--hipocampo") ruta_hip = sig();
         else if (a == "--consulta") { if (!consultas_propias) consultas.clear(); consultas_propias = true; consultas.push_back(sig()); }
         else { fprintf(stderr, "opción desconocida: %s\n", a.c_str()); return 1; }
     }
@@ -217,6 +220,41 @@ int main(int argc, char ** argv) {
             if (esp >= 0) printf("\n    esperada: %s  lista %.2f  calibrada %.2f  predicción %.2f", e.region, sc[esp], sc[esp] - cal[esp], pr[esp]);
             printf("\n");
         }
+    }
+    if (!ruta_hip.empty()) {   // hipocampo: ¿cuánto se parecen pares relacionados y no relacionados?
+        llama_model * mh = llama_model_load_from_file(ruta_hip.c_str(), llama_model_default_params());
+        hipocampo hp(mh, n_threads);
+        if (!mh || !hp.ok()) { fprintf(stderr, "no se pudo cargar el hipocampo %s\n", ruta_hip.c_str()); return 1; }
+        struct par { const char * recuerdo, * pregunta; bool relacionado; };
+        static const par P[] = {
+            { "Mi perro se llama Bruno y le encanta correr en la playa.", "Cómo se llama mi mascota", true },
+            { "Juan abrió una cuenta de ahorro y deposita 400 pesos cada quincena.", "Cuánto dinero guardo cada mes", true },
+            { "La abuela preparaba té de manzanilla con miel para el dolor de estómago.", "Qué remedio casero sirve para la panza", true },
+            { "Rotar el maíz con frijol devuelve nitrógeno al suelo.", "Cómo mejoro la tierra de mi milpa", true },
+            { "Mi perro se llama Bruno y le encanta correr en la playa.", "Cuál es la capital de Francia", false },
+            { "Juan abrió una cuenta de ahorro y deposita 400 pesos cada quincena.", "Cómo se forma un arcoíris", false },
+            { "La abuela preparaba té de manzanilla con miel para el dolor de estómago.", "Quién ganó el partido del domingo", false },
+            { "Rotar el maíz con frijol devuelve nitrógeno al suelo.", "Cómo programo un bucle en Python", false },
+        };
+        double sr = 0, sn = 0, min_r = 2, max_n = -2;
+        int nr = 0, nn = 0;
+        printf("\n== Hipocampo: similitud recuerdo-pregunta (firma de 256 bits) ==\n");
+        for (const par & q : P) {
+            firma a, b;
+            if (!hp.firmar(q.recuerdo, false, a) || !hp.firmar(q.pregunta, true, b)) continue;
+            const double s2 = similitud(a, b);
+            printf("  %s %.2f  %s\n", q.relacionado ? "relacionado   " : "sin relación  ", s2, q.pregunta);
+            if (q.relacionado) { sr += s2; ++nr; min_r = std::min(min_r, s2); } else { sn += s2; ++nn; max_n = std::max(max_n, s2); }
+        }
+        if (nr && nn) {
+            printf("  promedio relacionados %.2f (mínimo %.2f), sin relación %.2f (máximo %.2f)\n", sr / nr, min_r, sn / nn, max_n);
+            printf("  umbral sugerido para --nai-hipocampo-umbral: %.2f%s\n", (min_r + max_n) / 2,
+                   min_r > max_n ? "" : "  (los grupos se traslapan: este modelo separa mal)");
+        }
+        llama_model_free(mh);
+        llama_model_free(model);   // --hipocampo es solo calibración
+        llama_backend_free();
+        return 0;
     }
     printf("\n== 1-2. Clasificación por el modelo y reconstrucción exacta ==\n");
     int aciertos = 0, con_etiqueta = 0, exactos = 0;

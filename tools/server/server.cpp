@@ -232,6 +232,52 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.del ("/models",               ex_wrapper(models_routes->del_router_models));
     }
 
+    // [NAI] especialista bajo demanda: las preguntas de código van a otro llama-server (si está vivo)
+    if (!models_routes.has_value() && !params.nai_especialista.empty()) {
+        const common_http_url esp = common_http_parse_url(params.nai_especialista);
+        if (esp.host.empty() || (esp.scheme != "http" && esp.scheme != "https")) {
+            SRV_WRN("[NAI] --nai-especialista '%s' no es una URL http válida; se ignora\n", params.nai_especialista.c_str());
+        } else {
+            SRV_INF("[NAI] especialista en código: %s (si no responde, contesta el modelo principal)\n",
+                    params.nai_especialista.c_str());
+            auto principal = routes.post_chat_completions;
+            routes.post_chat_completions = [principal, esp, &ctx_server](const server_http_req & req) -> server_http_res_ptr {
+                std::string texto;
+                try {
+                    const json body = json::parse(req.body);
+                    if (body.contains("messages") && body.at("messages").is_array()) {
+                        for (const auto & m : body.at("messages")) {   // el último mensaje del usuario
+                            if (m.value("role", "") != "user" || !m.contains("content")) continue;
+                            const auto & c = m.at("content");
+                            texto.clear();
+                            if (c.is_string()) texto = c.get<std::string>();
+                            else if (c.is_array()) for (const auto & p : c) if (p.value("type", "") == "text") texto += p.value("text", "");
+                        }
+                    }
+                } catch (...) {
+                    return principal(req);
+                }
+                if (texto.empty() || !ctx_server.nai_es_pregunta_de_codigo(texto)) {
+                    return principal(req);
+                }
+                {   // ¿está corriendo? (bajo demanda: si no, responde el principal)
+                    httplib::Client cli(esp.scheme + "://" + common_http_format_host(esp.host) + ":" + std::to_string(esp.port));
+                    cli.set_connection_timeout(0, 300000);
+                    cli.set_read_timeout(2, 0);
+                    auto r = cli.Get("/health");
+                    if (!r || r->status != 200) {
+                        SRV_WRN("%s\n", "[NAI] pregunta de código, pero el especialista no responde: contesta el principal");
+                        return principal(req);
+                    }
+                }
+                SRV_INF("%s\n", "[NAI] pregunta de código: la responde el especialista");
+                std::map<std::string, std::string> headers = { { "Content-Type", "application/json" } };
+                return std::make_unique<server_http_proxy>("POST", esp.scheme, esp.host, esp.port, "/v1/chat/completions",
+                                                           headers, req.body, req.files, req.should_stop, 600, 600);
+            };
+        }
+    }
+
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));

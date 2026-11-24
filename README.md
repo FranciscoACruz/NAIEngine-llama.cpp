@@ -230,7 +230,7 @@ Lo que no hace sola, o todavía no hace bien:
 | **Pasar lo aprendido al modelo** | La memoria funciona sola; el reentrenamiento (LoRA) se corre a mano con `nai_reentrenar.py` y se carga con `--lora` | Correrlo cuando haya suficiente material (§3.6) |
 | **Juzgar la importancia al leer** | No entiende la importancia de un dato la primera vez; la aprende con el uso (lo consultado sube, lo que nadie toca baja) | Indicar la región del material que ya sabes que importa |
 | **Clasificar con modelos chicos** | La precisión depende del modelo; con Qwen2.5-0.5B aún está por medirse con el método por predicción | Indicar `"region"` al enviar; medir con `nai_memoria` (§3.7) |
-| **Relacionar por significado** | Las claves son palabras: «mascota» no encuentra un recuerdo sobre «perro» | Pendiente: búsqueda por significado (§9.5) |
+| **Relacionar por significado** | Solo con claves, «mascota» no encuentra un recuerdo sobre «perro» | Activar el hipocampo: `--nai-hipocampo` (§3.8) |
 | **Recordar las conversaciones a largo plazo** | La biblioteca (documentos) no caduca. **La memoria de cada conversación caduca a las 24 h sin uso** (`--nai-sesion-ttl 86400`) | Para recordar pláticas por meses, súbelo, p. ej. `--nai-sesion-ttl 31536000` (un año) |
 
 ### 3.4 Línea de comandos
@@ -268,7 +268,36 @@ Las líneas `mkdir`, `printf` y `docker run` levantan SearxNG en tu máquina (re
 ./build/bin/nai_medir_capas -m qwen2.5-0.5b-instruct-q4_k_m.gguf -n 64
 ./build/bin/nai_memoria -m qwen2.5-3b-instruct-q4_k_m.gguf -c "lápiz"
 python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 --reps 3
+./build/bin/nai_memoria -m qwen2.5-0.5b-instruct-q4_k_m.gguf --hipocampo Qwen3-Embedding-0.6B-Q8_0.gguf   # calibra --nai-hipocampo-umbral
+bash tools/nai/probar-nai.sh qwen2.5-0.5b-instruct-q4_k_m.gguf     # prueba completa: compilar, medir, conversar, aprender
 ```
+
+### 3.8 Varios modelos: cerebelo, hipocampo, especialista y voz
+
+NAI puede repartir el trabajo como las partes de un cerebro (detalle en `docs/RUTA_INFORMACION.md`). Cada pieza es opcional; sin ellas, el modelo principal hace todo.
+
+```console
+./build/bin/llama-server -m Qwen3-1.7B-Q4_K_M.gguf --port 8080 -fitt 2048 \
+  --nai-sesiones ./sesiones --nai-memoria --nai-sesion-ttl 31536000 \
+  --nai-cerebelo Qwen3-0.6B-Q4_K_M.gguf \
+  --nai-hipocampo Qwen3-Embedding-0.6B-Q8_0.gguf \
+  --nai-especialista http://localhost:8081
+```
+
+| Pieza | Flag | Qué hace |
+|---|---|---|
+| Cerebelo | `--nai-cerebelo FILE` | Un modelo chico se encarga de la memoria, el guardián y la clasificación; el principal solo conversa. Para usarlo también como borrador especulativo, pásalo además con `-md` (debe ser de la misma familia que el principal) |
+| Hipocampo | `--nai-hipocampo FILE` | Un modelo de embeddings relaciona por significado: «mi mascota» encuentra «mi perro» aunque no compartan palabras. Calibra el umbral con `nai_memoria --hipocampo` |
+| Especialista | `--nai-especialista URL` | Las preguntas de código y ciberseguridad técnica van a otro `llama-server` (por ejemplo, Qwen2.5-Coder en el 8081). Si no está corriendo, responde el principal: se arranca solo cuando se necesita |
+| Oído y voz | `tools/nai/nai-voz.sh` | Habla con NAI: graba (sox), transcribe en español (whisper.cpp), envía con una sesión y lee la respuesta (`say` en macOS) |
+
+El especialista se arranca aparte, cuando se necesite:
+
+```console
+./build/bin/llama-server -m Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf --port 8081 -fitt 2048
+```
+
+Para hablar con NAI (macOS): `brew install whisper-cpp sox`, descarga un modelo de Whisper (`ggml-small.bin` o `ggml-large-v3-turbo-q5_0.bin`) y ejecuta `bash tools/nai/nai-voz.sh -w ggml-small.bin`.
 
 ---
 
@@ -289,6 +318,10 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 | Memoria reconstructiva | `--nai-memoria` (requiere `--nai-sesiones DIR`) | apagada | Cambia lo que ve el modelo: recuerdos en lugar del historial | La conversación no se acumula en el KV cache; se guarda comprimida con el modelo en una memoria fija por regiones |
 | Tamaño de la memoria por sesión | `--nai-memoria-bytes N` | `16384` | — | Presupuesto fijo de cada sesión |
 | Sesión por defecto | `--nai-sesion-defecto ID` | `web` | — | Sesión de memoria para clientes sin `nai_session` (interfaz web, clientes OpenAI); vacío = sin memoria |
+| Cerebelo | `--nai-cerebelo FILE` | apagado (el principal hace todo) | No | Modelo chico para la memoria, el guardián y la clasificación (§3.8) |
+| Hipocampo | `--nai-hipocampo FILE` | apagado (solo claves) | Agrega recuerdos por significado | Modelo de embeddings; cada recuerdo guarda una firma de 32 B (§5.9) |
+| Umbral del hipocampo | `--nai-hipocampo-umbral F` | `0.5` | — | Similitud mínima para traer un recuerdo sin palabras en común; calíbralo con `nai_memoria --hipocampo` |
+| Especialista | `--nai-especialista URL` | apagado | Responde otro modelo | Las preguntas de código van a otro `llama-server`; si no responde, contesta el principal |
 | Memoria compacta | `--nai-memoria-compacta` | apagada (portable) | — | Codifica los recuerdos con el modelo: ocupan menos, pero solo se leen con el mismo modelo, backend, `-ngl`, hilos y versión |
 | Tamaño de la biblioteca | `--nai-biblioteca-bytes N` | `8388608` (8 MiB) | — | Presupuesto de lo aprendido de documentos |
 | Regiones de la memoria | `--nai-regiones ARCHIVO` | 26 integradas | — | Líneas `peso\|tema\|semilla` |
@@ -495,6 +528,14 @@ Es decir, **el costo de recordar un texto es exactamente su masa semántica tota
 $$\text{importancia} = w_{\text{región}} \cdot (1 + 0.5 \cdot \text{usos}) + \frac{1}{1 + \text{días sin usarse}}$$
 
 con $w = 3$ para las 19 regiones prioritarias (conciencia, ética, espiritualidad, empatía, lógica, filosofía, psique, biología, física, matemáticas, ciberseguridad, supervivencia, ingeniería, mecánica, aerodinámica, química, medicina tradicional, agricultura, arte) y $w = 1$ para las generales (finanzas personales, cocina, compras, deportes, trámites, entretenimiento, general). Cada vez que un recuerdo se usa, sus `usos` suben y su día se renueva (reasignación por importancia). Mientras la memoria ocupe más que su presupuesto, el recuerdo menos importante baja un nivel.
+
+**Huella del archivo.** Cada `.mem` lleva la huella del vocabulario (el texto de todos sus tokens) y de las regiones. Cambiar a otro modelo de la misma familia (0.5B → 3B, o pasar la memoria al cerebelo) conserva lo aprendido; cambiar de familia (Qwen → Llama) empieza una memoria nueva. Los archivos con la huella anterior (v6.6 y antes) se siguen aceptando.
+
+**Hipocampo: búsqueda por significado (`--nai-hipocampo`).** Un modelo de embeddings convierte cada recuerdo en una **firma de 256 bits**: la proyección aleatoria fija (SimHash) de su vector, 32 B en lugar de 4 KB. La similitud con la pregunta se estima contando bits distintos:
+
+$$\text{sim}(a, b) = \cos\left(\pi \cdot \frac{\text{popcount}(a \oplus b)}{256}\right)$$
+
+Comparar contra 100 mil recuerdos son 100 mil `popcount`: microsegundos. Un recuerdo sin palabras en común con la pregunta entra solo si su similitud supera `--nai-hipocampo-umbral` (puntaje $20 \cdot \text{sim} + \text{importancia}$, a lo más 3). Las firmas viajan en el archivo (formato v4, con la identidad del hipocampo); los `.mem` v3 se leen igual y sus firmas se calculan en segundo plano, en tandas de 64. Si cambias de hipocampo, se recalculan.
 
 **Costo por recuerdo:** 7 B de encabezado (región, nivel y rol, usos, verificación, día, número de claves) + 2 B por clave + 2 B + el código. Con Qwen2.5-3B, el código de una oración ocupó ~20 B en la medición de v2.
 
@@ -724,6 +765,9 @@ petición HTTP ──► server-context.cpp
 | `common/nai-memoria.h/.cpp` | Memoria reconstructiva: diccionario de tokens (portable, por defecto) o rANS guiado por el modelo, niveles, claves con segundo salto, turnos recientes, presupuesto, archivo `.mem` y servicio con hilo de trabajo que cede el paso a las peticiones activas |
 | `common/nai-lector.h/.cpp` | Lector único: URLs (con protección de red interna), HTML, PDF, Word, RTF, ODT y texto; lo usan servidor, CLI (`/read`) y `--tools read_file` |
 | `.github/workflows/nai.yml` | CI: compila y prueba NAI en Linux, macOS y Windows |
+| `tools/server/server.cpp` | Enrutamiento al especialista (`--nai-especialista`), con el proxy del modo router |
+| `tools/nai/probar-nai.sh` | Prueba completa de punta a punta: compilar, medir, conversar, aprender |
+| `tools/nai/nai-voz.sh` | Oído y voz: sox + whisper.cpp + `say` |
 | `tools/server/server-context.cpp` | Desalojo, gravedad, sesiones y traza en el servidor |
 | `tools/server/server-task.h`, `server-queue.cpp` | Campo `nai_session` de la petición |
 | `tools/cli/cli-context.cpp/.h` | Triaje y autopista en el CLI |
@@ -812,10 +856,10 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 - **Planificador en el servidor:** implementar lo validado en `docs/PLANIFICADOR.md`, empezando por la admisión (Schwarzschild) y la hibernación reutilizando el código de sesiones.
 - **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo. Los HTTP 500 del parser de chat ya no cortan la plática en NAI (la salida mal formada se entrega como texto), pero el oficial trae más correcciones.
 - **Naturaleza indicada al aprender:** un campo `"naturaleza"` en `/nai/aprender` y una tercera columna en `nai-fuentes.txt`, para que el material propio (tradiciones de sabiduría, cosmogonías) entre como sabiduría sin depender del guardián.
-- **Varios modelos especializados, como partes del cerebro:** un *cerebelo* chico (0.5B) para la memoria, el borrador especulativo y el reparto de preguntas; un *hipocampo* de embeddings para relacionar por significado; especialistas (código, matemáticas) cargados bajo demanda; la memoria NAI como cuerpo calloso que todos comparten. Orden propuesto: hipocampo, cerebelo, especialistas, midiendo cada paso.
+- **Medir los modelos del cerebro con modelos reales:** precisión del cerebelo (región, naturaleza, reparto al especialista), umbral del hipocampo con Qwen3-Embedding y velocidad con `-md` en la Mac; ajustar los valores por defecto con esos números.
 - **Reentrenamiento automático:** correr `nai_reentrenar.py todo` cuando la biblioteca acumule suficiente material nuevo, y aceptar el adaptador solo si pasa el control de olvido.
 - **Recargar el adaptador sin reiniciar:** un endpoint que cargue un `.gguf` LoRA nuevo en caliente; hoy se reinicia el servidor con `--lora`.
-- **Búsqueda por significado:** complementar las claves (que no entienden sinónimos) con una firma semántica compacta por recuerdo, calculada por el hipocampo de embeddings.
+- **Especialista con memoria:** hoy el especialista recibe la conversación del cliente pero no los recuerdos de NAI, y su respuesta no se guarda en la memoria. Pasarle el contexto preparado y registrar su turno.
 - **Salida temprana real:** solo con modelos entrenados para ello (LayerSkip) y en hardware donde verificar un lote cueste ≈ 1 paso.
 
 ---

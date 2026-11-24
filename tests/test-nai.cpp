@@ -370,12 +370,25 @@ static void test_guardian() {
     std::printf("%s\n", "[test-nai] guardián OK (manipulación por patrones)");
 }
 
+static void test_firma() {
+    nai_mem::firma a{ 0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL, 0x0F0F0F0F0F0F0F0FULL, 0xAAAAAAAAAAAAAAAAULL };
+    nai_mem::firma b = a, c = a, d{};
+    for (auto & x : c) x = ~x;                          // todos los bits distintos
+    b[0] ^= 0xFFFFFFFFULL;                              // 32 de 256 bits distintos
+    NAI_CHECK(std::fabs(nai_mem::similitud(a, a) - 1.0) < 1e-9);
+    NAI_CHECK(std::fabs(nai_mem::similitud(a, c) + 1.0) < 1e-9);
+    NAI_CHECK(std::fabs(nai_mem::similitud(a, b) - std::cos(3.14159265358979323846 * 32 / 256)) < 1e-9);
+    NAI_CHECK(std::fabs(nai_mem::similitud(d, d) - 1.0) < 1e-9);
+    std::printf("%s\n", "[test-nai] firma de significado OK (popcount portable)");
+}
+
 int main() {
     test_entropia();
     test_memoria();
     test_cifrado();
     test_diccionario_tokens();
     test_guardian();
+    test_firma();
     test_sorpresa();
     test_pendientes();
     test_mapa_masa();

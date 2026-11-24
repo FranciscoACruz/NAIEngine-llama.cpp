@@ -18,6 +18,7 @@
 #include "../../src/llama-ext.h" // [NAI] API de masa semántica / desalojo
 #include "../../src/nai-session-table.hpp" // [NAI] sesiones persistentes
 #include "nai-memoria.h" // [NAI] memoria reconstructiva por regiones
+#include "llama-cpp.h"   // [NAI] llama_model_ptr (cerebelo, hipocampo)
 #include "nai-lector.h"  // [NAI] lectura de documentos y URLs
 #include "nai-cifrado.h" // [NAI] cifrado de sesiones y memorias
 #include "base64.hpp"     // [NAI] archivos enviados a /nai/aprender
@@ -1096,6 +1097,9 @@ private:
     nai::NaiSessionTable nai_tabla;
     std::string          nai_dir;
     // [NAI] memoria reconstructiva (--nai-memoria). Se lee con std::atomic_load desde los hilos HTTP.
+    // [NAI] modelos auxiliares: se declaran antes que nai_memoria para liberarse después de ella
+    llama_model_ptr      nai_modelo_cerebelo;    // --nai-cerebelo: memoria, guardián y clasificación
+    llama_model_ptr      nai_modelo_hipocampo;   // --nai-hipocampo: embeddings para relacionar por significado
     std::shared_ptr<nai_mem::servicio> nai_memoria;
     int64_t              nai_ttl = 86400;
     nai::ClaveSesion     nai_clave;   // clave secreta del hash (archivo .nai-clave en nai_dir)
@@ -1708,13 +1712,33 @@ private:
                 cfg.ruta_regiones    = params_base.nai_regiones;
                 cfg.clave            = nai_cla;
                 cfg.compacta         = params_base.nai_memoria_compacta;
-                auto mem = std::make_shared<nai_mem::servicio>(model_tgt, cfg);
+                auto cargar_aux = [&](const std::string & ruta, const char * papel) -> llama_model * {
+                    if (ruta.empty()) return nullptr;
+                    llama_model * m = llama_model_load_from_file(ruta.c_str(), llama_model_default_params());
+                    if (m) SRV_INF("[NAI] %s cargado: %s\n", papel, ruta.c_str());
+                    else   SRV_WRN("[NAI] no se pudo cargar el %s '%s'; se omite\n", papel, ruta.c_str());
+                    return m;
+                };
+                nai_modelo_cerebelo.reset(cargar_aux(params_base.nai_cerebelo, "cerebelo"));
+                nai_modelo_hipocampo.reset(cargar_aux(params_base.nai_hipocampo, "hipocampo"));
+                llama_model * guarda = nai_modelo_cerebelo ? nai_modelo_cerebelo.get() : model_tgt;
+                if (nai_modelo_cerebelo &&
+                    llama_vocab_n_tokens(llama_model_get_vocab(guarda)) != llama_vocab_n_tokens(llama_model_get_vocab(model_tgt))) {
+                    SRV_WRN("%s\n", "[NAI] el cerebelo tiene otro vocabulario que el modelo principal: la memoria guardada "
+                                    "con el principal no se podrá leer (empieza una nueva) y no sirve como borrador -md");
+                }
+                cfg.modelo_hipocampo = nai_modelo_hipocampo.get();
+                cfg.umbral_hipocampo = params_base.nai_hipocampo_umbral;
+                auto mem = std::make_shared<nai_mem::servicio>(guarda, cfg);
                 if (mem->ok()) {
                     std::atomic_store(&nai_memoria, mem);
                     SRV_INF("[NAI] memoria activa: %lld B por sesión, biblioteca de %lld B, en '%s' (%s)\n",
                             (long long) cfg.bytes_sesion, (long long) cfg.bytes_biblioteca, nai_dir.c_str(),
                             cfg.compacta ? "codificación con el modelo: compacta, solo para este entorno"
                                          : "diccionario de tokens: portable");
+                    SRV_INF("[NAI] memoria a cargo de: %s; búsqueda: %s\n",
+                            nai_modelo_cerebelo ? "el cerebelo" : "el modelo principal",
+                            nai_modelo_hipocampo ? "claves + significado (hipocampo)" : "claves");
                 } else {
                     SRV_WRN("%s\n", "[NAI] no se pudo crear el contexto de la memoria; queda desactivada");
                 }
@@ -4579,6 +4603,13 @@ llama_context * server_context::get_llama_context() const {
 
 server_response_reader server_context::get_response_reader() {
     return impl->get_response_reader();
+}
+
+bool server_context::nai_es_pregunta_de_codigo(const std::string & texto) const {
+    if (auto mem = std::atomic_load(&impl->nai_memoria)) {
+        return mem->es_pregunta_de_codigo(texto);
+    }
+    return nai_mem::parece_codigo(texto);   // sin memoria: solo la sintaxis evidente
 }
 
 server_context_meta server_context::get_meta() const {

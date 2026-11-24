@@ -5,6 +5,8 @@
 #   bash tools/nai/probar-nai.sh [modelo.gguf] [puerto]
 #
 # Por defecto: qwen2.5-0.5b-instruct-q4_k_m.gguf en la carpeta del repo, puerto 8080.
+# Opcional, para probar el cerebro completo:
+#   NAI_CEREBELO=Qwen3-0.6B-Q4_K_M.gguf NAI_HIPOCAMPO=Qwen3-Embedding-0.6B-Q8_0.gguf bash tools/nai/probar-nai.sh
 # Pensado para una Mac con 8 GB: compila con -j4 y arranca el servidor con -fitt 2048.
 # Solo detiene el servidor que este script arranca; no cierra nada más.
 
@@ -52,9 +54,12 @@ if curl -s "$URL/health" > /dev/null 2>&1; then
   falla "ya hay algo escuchando en el puerto $PUERTO. Usa otro: bash tools/nai/probar-nai.sh $MODELO 8090"
 fi
 rm -rf "$SESIONES"
+EXTRA=()
+[ -n "$NAI_CEREBELO" ]  && EXTRA+=(--nai-cerebelo "$NAI_CEREBELO")
+[ -n "$NAI_HIPOCAMPO" ] && EXTRA+=(--nai-hipocampo "$NAI_HIPOCAMPO")
 ./build/bin/llama-server -m "$MODELO" --port "$PUERTO" -fitt 2048 \
   --nai-sesiones "$SESIONES" --nai-memoria --nai-sesion-ttl 31536000 \
-  --context-shift --nai-desalojo > "$LOG" 2>&1 &
+  --context-shift --nai-desalojo "${EXTRA[@]}" > "$LOG" 2>&1 &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT   # al terminar (o con Ctrl+C) se detiene SOLO este servidor
 for i in $(seq 120); do
@@ -63,7 +68,11 @@ for i in $(seq 120); do
   sleep 1
 done
 curl -s "$URL/health" | grep -q ok || falla "el servidor no respondió en 2 minutos; revisa $LOG"
-grep "memoria activa" "$LOG" | sed 's/.*\[NAI\]/  [NAI]/'
+grep -E "memoria activa|memoria a cargo|cerebelo|hipocampo" "$LOG" | sed 's/.*\[NAI\]/  [NAI]/'
+if [ -n "$NAI_HIPOCAMPO" ]; then
+  titulo "4b. Calibrar el hipocampo"
+  ./build/bin/nai_memoria -m "${NAI_CEREBELO:-$MODELO}" -t 4 --hipocampo "$NAI_HIPOCAMPO" 2>/dev/null | sed -n '/Hipocampo/,/umbral sugerido/p'
+fi
 
 titulo "5. Conversación: recordar lo que se dijo"
 preguntar "Hola, me llamo Francisco y mi perro se llama Bruno. A Bruno le encanta correr en la playa."

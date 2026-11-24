@@ -1,8 +1,19 @@
 # Ruta de la información en NAI, modelo por modelo
 
-Este documento sigue el camino de la información desde que entra a NAI hasta que se vuelve parte del modelo, e indica qué modelo interviene en cada paso. Distingue lo que **ya existe** de lo que está **planeado** (README §9.5).
+Este documento sigue el camino de la información desde que entra a NAI hasta que se vuelve parte del modelo, e indica qué modelo interviene en cada paso.
 
-**Hoy un solo modelo hace todo**: conversa y, en un contexto aparte de 1,024 tokens (el *motor de memoria*), guarda, clasifica y vigila lo que se aprende. El plan es repartir ese trabajo entre modelos especializados, como las partes de un cerebro, sin cambiar las rutas: cambia quién hace cada paso, no el camino.
+**Estado (v7):** NAI puede repartir el trabajo entre varios modelos, como las partes de un cerebro. Cada pieza se activa con su flag; sin ellas, el modelo principal hace todo, como antes. Las rutas no cambian: cambia quién hace cada paso.
+
+| Pieza | Cómo se activa | Estado |
+|---|---|---|
+| Modelo principal | `-m modelo.gguf` | Funciona |
+| Motor de memoria y guardián | `--nai-memoria` | Funciona (en el principal o en el cerebelo) |
+| Cerebelo | `--nai-cerebelo modelo.gguf` | Funciona; precisión por medir con modelos reales |
+| Hipocampo | `--nai-hipocampo embeddings.gguf` | Funciona; umbral por calibrar con modelos reales |
+| Especialista en código | `--nai-especialista URL` | Funciona; sin recuerdos de NAI todavía |
+| Borrador especulativo | `-md` con el modelo del cerebelo | Funciona (llama.cpp); velocidad por medir |
+| Oído y voz | `tools/nai/nai-voz.sh` | Funciona en pruebas simuladas; falta probarlo con micrófono |
+| Identidad LoRA | `nai_reentrenar.py` + `--lora` | El proceso existe; falta entrenarlo |
 
 ## 1. Mapa general
 
@@ -25,17 +36,17 @@ flowchart LR
 | Modelo | Parte del cerebro | Qué recibe | Qué produce | Estado |
 |---|---|---|---|---|
 | **Modelo principal** (1.5–3B instruct) | Corteza: conversar y razonar | Mensaje, recuerdos relevantes, últimos 3 turnos | La respuesta | **Existe** |
-| **Motor de memoria** (hoy: el mismo modelo, contexto aparte) | Hipocampo que guarda | Cada trozo nuevo | Región, naturaleza, claves, frase IDEA al olvidar | **Existe** dentro del principal |
+| **Motor de memoria** (contexto aparte de 1,024 tokens) | Hipocampo que guarda | Cada trozo nuevo | Región, naturaleza, claves, frase IDEA al olvidar | **Existe**: en el cerebelo si está, si no en el principal |
 | **Guardián** (dentro del motor) | Filtro de lo que se aprende | Cada trozo nuevo | Naturaleza: conocimiento, sabiduría, desahogo, manipulación | **Existe**: patrones fijos + predicción |
 | **Identidad LoRA** (sobre el principal) | Corteza prefrontal: carácter, ética, empatía | Carta de identidad + biblioteca | Un adaptador que se carga con `--lora` | **Existe** el proceso; falta entrenarlo |
-| **Cerebelo** (0.5B instruct) | Automático y predictivo | Trozos nuevos; borradores de la respuesta | El trabajo del motor de memoria; tokens propuestos al principal (especulación); a qué especialista va cada pregunta | **Planeado** |
-| **Hipocampo de embeddings** (modelo de embeddings chico) | Asociación por significado | Cada trozo y cada pregunta | Un vector de significado: «mascota» encuentra «perro» | **Planeado** |
-| **Especialistas** (código, matemáticas; 1.5B) | Áreas especializadas | Preguntas que el cerebelo les envía | Respuestas de su campo | **Planeado**, cargados bajo demanda |
+| **Cerebelo** (0.5B instruct) | Automático y predictivo | Trozos nuevos; borradores de la respuesta | El trabajo del motor de memoria; tokens propuestos al principal (especulación); a qué especialista va cada pregunta | **Existe** (`--nai-cerebelo`; especulación con `-md`) |
+| **Hipocampo de embeddings** (modelo de embeddings chico) | Asociación por significado | Cada trozo y cada pregunta | Una firma de significado de 32 B: «mascota» encuentra «perro» | **Existe** (`--nai-hipocampo`) |
+| **Especialista en código** (1.5B) | Área especializada | Preguntas que el cerebelo le envía | Respuestas de su campo | **Existe** (`--nai-especialista URL`), bajo demanda |
 | **Memoria NAI** (no es un modelo) | Cuerpo calloso: lo que todos comparten | Lo que guardan todos | Recuerdos para todos | **Existe** |
 
 ## 2b. Modelos concretos y conocimientos de cada uno
 
-Hoy NAI corre con **un solo modelo** (el que pasas con `-m`; en las pruebas, Qwen2.5-0.5B-Instruct). La tabla dice qué modelo se propone para cada papel cuando se reparta el trabajo. Todos son de la familia Qwen para compartir vocabulario (regla 1 y 2, §6), salvo el oído y la voz, que no tocan la memoria.
+La tabla dice qué modelo se propone para cada papel (cada uno se pasa con su flag, §2). Sin flags, el modelo de `-m` hace todos los papeles. Todos son de la familia Qwen para compartir vocabulario (regla 1 y 2, §6), salvo el oído y la voz, que no tocan la memoria.
 
 | Papel | Modelo propuesto (GGUF) | Tamaño q4 aprox. | Conocimientos y tareas que le corresponden |
 |---|---|---|---|
@@ -66,10 +77,10 @@ flowchart LR
 
 La voz entra y sale **por fuera** del servidor: el oído convierte el audio en texto antes de entrar y la voz lee la respuesta al salir. La memoria, el guardián y la identidad no cambian. Lo que se guarda es el texto transcrito, no el audio.
 
-| Pieza | Qué existe ya | Qué falta |
+| Pieza | Qué hay | Qué falta |
 |---|---|---|
-| Oído | whisper.cpp es del mismo ecosistema ggml y corre en Metal en Apple Silicon | Un script o cliente que grabe, transcriba y envíe a `/v1/chat/completions` |
-| Voz | `say` viene con macOS y tiene voces en español; el fork trae `llama-tts` para modelos OuteTTS | Leer la respuesta al llegar. OuteTTS 1.0 requiere una versión de `llama-tts` con soporte para su formato nuevo |
+| Oído | `tools/nai/nai-voz.sh`: graba con sox hasta que te callas y transcribe con whisper.cpp (Metal en Apple Silicon) | Probarlo con micrófono real |
+| Voz | El mismo script lee la respuesta con `say` (voz en español de macOS) o `espeak-ng` (Linux) | OuteTTS 1.0 requiere una versión de `llama-tts` con soporte para su formato nuevo |
 
 ## 3. Ruta de aprendizaje (entrada)
 
@@ -88,14 +99,14 @@ flowchart TD
     J -->|no| K["Bajar de nivel lo menos importante<br/>exacto → idea → pista → olvido"]
 ```
 
-| Paso | Lo hace hoy | Lo hará con el plan |
+| Paso | Sin cerebelo ni hipocampo | Con `--nai-cerebelo` y `--nai-hipocampo` |
 |---|---|---|
 | Leer y trocear | Código, sin modelo | Igual |
 | Detectar manipulación | Patrones fijos, sin modelo | Igual (determinista a propósito) |
 | Naturaleza (las otras tres) | Motor de memoria, por predicción | Cerebelo |
 | Región | La del archivo; si no, motor por predicción | La del archivo; si no, cerebelo |
 | Codificar | Diccionario de tokens del modelo que guarda | Igual, con el vocabulario del cerebelo |
-| Claves | Sorpresa medida por el motor | Sorpresa del cerebelo + vector del hipocampo |
+| Claves | Sorpresa medida por el motor | Sorpresa del cerebelo + firma del hipocampo |
 | Frase IDEA al olvidar | Motor de memoria (`generar`) | Cerebelo |
 
 **Importancia al olvidar** = factor de naturaleza × [peso de la región × (1 + 0.5 × usos) + 1 / (1 + días sin usarse)], con factor 1.5 para sabiduría, 1 para conocimiento, 0.5 para desahogo y 0.25 para manipulación (solo existe en conversaciones; en documentos se descarta). Lo menos importante se drena primero.
@@ -117,10 +128,10 @@ sequenceDiagram
     S-)M: en segundo plano: guardar el turno<br/>(guardián, región, codificar)
 ```
 
-| Paso | Lo hace hoy | Lo hará con el plan |
+| Paso | Sin cerebelo ni hipocampo | Con `--nai-cerebelo` y `--nai-hipocampo` |
 |---|---|---|
-| Buscar recuerdos | Claves (palabras), sin modelo | Claves + vector del hipocampo |
-| Elegir quién responde | Siempre el principal | El cerebelo reparte: principal o especialista |
+| Buscar recuerdos | Claves (palabras), sin modelo | Claves + firma del hipocampo |
+| Elegir quién responde | El principal, o el especialista si la pregunta trae código (con `--nai-especialista`) | El cerebelo decide: principal o especialista |
 | Generar la respuesta | Modelo principal | Principal con borrador del cerebelo (más rápido) |
 | Guardar el turno | Motor, en segundo plano; cede el paso si hay peticiones activas | Cerebelo, en segundo plano |
 
@@ -155,7 +166,7 @@ Hoy este proceso se corre a mano (`python3 tools/nai/nai_reentrenar.py todo …`
 
 ## 6. Reglas que no cambian al repartir el trabajo
 
-1. **El vocabulario de la memoria es fijo.** Los recuerdos se guardan como IDs de token del modelo que guarda. Si ese modelo cambia de familia (por ejemplo, de Qwen a Llama), los recuerdos dejan de leerse. Con el cerebelo, él será el dueño fijo de la memoria. **Ojo, hoy:** la huella de los archivos `.mem` incluye el tamaño del modelo, así que cambiar el modelo con `-m` (por ejemplo, de 0.5B a 3B) empieza una memoria nueva aunque el vocabulario sea el mismo. Pendiente: que con el diccionario de tokens la huella dependa solo del vocabulario.
+1. **El vocabulario de la memoria es fijo.** Los recuerdos se guardan como IDs de token del modelo que guarda. Si ese modelo cambia de familia (por ejemplo, de Qwen a Llama), los recuerdos dejan de leerse. Con el cerebelo, él será el dueño fijo de la memoria. Desde v7 la huella de los archivos depende solo del vocabulario: cambiar de 0.5B a 3B, o pasar la memoria al cerebelo de la misma familia, conserva lo aprendido.
 2. **La especulación solo funciona dentro de una familia.** El cerebelo y el principal deben compartir vocabulario (por ejemplo, Qwen 0.5B con Qwen 3B).
 3. **La manipulación se detecta sin modelo.** Patrones fijos y deterministas: ningún modelo, por grande que sea, decide si se aprende un intento de manipularlo.
 4. **La memoria solo se consulta cuando la pregunta la toca.** Lo asociado se ofrece como comentario opcional, nunca como dato impuesto.
@@ -165,7 +176,7 @@ Hoy este proceso se corre a mano (`python3 tools/nai/nai_reentrenar.py todo …`
 
 | Configuración | Modelos cargados | Total aprox. (sin KV) |
 |---|---|---|
-| **Hoy** | Un modelo (principal + motor de memoria) | 0.4 GB (0.5B) a 2 GB (3B) |
+| **Sin flags** | Un modelo (principal + motor de memoria) | 0.4 GB (0.5B) a 2 GB (3B) |
 | **Mínima con voz** | Qwen3-1.7B + Qwen3-0.6B + Qwen3-Embedding-0.6B + Whisper small + `say` | ~2.1 GB |
 | **Completa** | Qwen3-4B + Qwen3-0.6B + Qwen3-Embedding-0.6B + Whisper turbo + OuteTTS 0.6B | ~4.3 GB; el especialista en código (+1 GB) se carga solo cuando hace falta |
 

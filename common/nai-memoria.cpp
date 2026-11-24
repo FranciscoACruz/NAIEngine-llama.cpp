@@ -181,6 +181,15 @@ std::vector<uint16_t> claves_de(const std::string & texto) {
     return res;
 }
 
+bool parece_codigo(const std::string & texto) {
+    static const char * P[] = { "```", "#include", "def ", "function(", "function ", "console.log", "select ",
+                                "public static", "std::", "=>", "</", "printf(", "import ", "#!/", "sudo ",
+                                "npm ", "pip ", "git ", "{\n", "};" };
+    const std::string t = normalizar(texto);
+    for (const char * p : P) if (t.find(p) != std::string::npos) return true;
+    return false;
+}
+
 // Frases con las que un texto le habla a una IA para cambiarla. Conservadoras a propósito: una receta
 // o un manual también dan instrucciones, pero no le piden a nadie olvidar sus reglas.
 bool parece_manipulacion(const std::string & texto) {
@@ -375,6 +384,112 @@ struct rans_dec {
 static const int MAX_TOKENS_RECUERDO = 250;
 static const int N_CTX_MOTOR         = 1024;
 
+// ---------------------------------------------------------------------------- hipocampo
+static int popcount64(uint64_t x) {   // portable (C++17, MSVC incluido)
+    x = x - ((x >> 1) & 0x5555555555555555ULL);
+    x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
+    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+    return (int) ((x * 0x0101010101010101ULL) >> 56);
+}
+
+double similitud(const firma & a, const firma & b) {
+    int d = 0;
+    for (int i = 0; i < 4; ++i) d += popcount64(a[i] ^ b[i]);
+    return std::cos(3.14159265358979323846 * d / 256.0);
+}
+
+hipocampo::hipocampo(llama_model * m, int n_threads) : model(m) {
+    if (!model) return;
+    vocab  = llama_model_get_vocab(model);
+    n_embd = llama_model_n_embd(model);
+    auto crear = [&](enum llama_pooling_type pool) {
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx = cp.n_batch = cp.n_ubatch = 512;
+        cp.n_seq_max       = 1;
+        cp.embeddings      = true;
+        cp.pooling_type    = pool;
+        cp.n_threads       = std::max(1, n_threads);
+        cp.n_threads_batch = std::max(1, n_threads);
+        cp.no_perf         = true;
+        return llama_init_from_model(model, cp);
+    };
+    ctx = crear(LLAMA_POOLING_TYPE_UNSPECIFIED);   // la que declara el modelo (Qwen3-Embedding: last)
+    if (ctx && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE) {   // modelo sin pooling: promedio
+        llama_free(ctx);
+        ctx = crear(LLAMA_POOLING_TYPE_MEAN);
+    }
+    if (!ctx) return;
+    // proyección fija: signos de un generador determinista (la misma en cualquier máquina)
+    proy.resize((size_t) 256 * n_embd);
+    uint64_t z = 0x9E3779B97F4A7C15ULL;
+    for (auto & v : proy) {
+        z += 0x9E3779B97F4A7C15ULL;
+        uint64_t x = z;
+        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+        v = ((x ^ (x >> 31)) & 1) ? 1.0f : -1.0f;
+    }
+    char desc[256] = { 0 };
+    llama_model_desc(model, desc, sizeof(desc));
+    const std::string h = std::string(desc) + "/" + std::to_string(n_embd) + "/" +
+                          std::to_string(llama_model_n_params(model)) + "/" + std::to_string(llama_vocab_n_tokens(vocab));
+    id_ = ((uint64_t) fnv32(h) << 32) | fnv32(h + "#hipocampo");
+}
+
+hipocampo::~hipocampo() {
+    if (ctx) llama_free(ctx);
+}
+
+bool hipocampo::firmar(const std::string & texto, bool consulta, firma & out) {
+    if (!ctx || texto.empty()) return false;
+    const std::string t = consulta
+        ? "Instruct: Dada una pregunta, encuentra los recuerdos que ayudan a responderla\nQuery: " + texto
+        : texto;
+    std::vector<llama_token> tk(t.size() + 16);
+    int n = llama_tokenize(vocab, t.c_str(), (int) t.size(), tk.data(), (int) tk.size(), true, false);
+    if (n < 0) { tk.resize(-n); n = llama_tokenize(vocab, t.c_str(), (int) t.size(), tk.data(), (int) tk.size(), true, false); }
+    if (n <= 0) return false;
+    tk.resize(std::min(n, 512));
+    llama_memory_clear(llama_get_memory(ctx), true);
+    llama_batch b = llama_batch_init((int32_t) tk.size(), 0, 1);
+    for (size_t i = 0; i < tk.size(); ++i) {
+        b.token[i] = tk[i]; b.pos[i] = (llama_pos) i; b.n_seq_id[i] = 1; b.seq_id[i][0] = 0; b.logits[i] = true;
+    }
+    b.n_tokens = (int32_t) tk.size();
+    const bool ok = llama_decode(ctx, b) == 0;
+    llama_batch_free(b);
+    if (!ok) return false;
+    const float * e = llama_get_embeddings_seq(ctx, 0);
+    if (!e) return false;
+    out = firma{};
+    for (int i = 0; i < 256; ++i) {
+        const float * p = proy.data() + (size_t) i * n_embd;
+        double acc = 0;
+        for (int j = 0; j < n_embd; ++j) acc += (double) p[j] * e[j];
+        if (acc > 0) out[i / 64] |= 1ULL << (i % 64);
+    }
+    return true;
+}
+
+size_t motor::rellenar_firmas(memoria & m, size_t max) {
+    if (!hip) return 0;
+    if (m.hip_id != hip->id()) {                 // firmas de otro hipocampo: no sirven
+        for (auto & r : m.recuerdos) r.con_firma = false;
+        m.hip_id = hip->id();
+        m.sucia = true;
+    }
+    size_t hechas = 0, faltan = 0;
+    for (auto & r : m.recuerdos) {
+        if (r.con_firma || r.danado) continue;
+        if (hechas >= max) { ++faltan; continue; }
+        const std::string & t = texto(r);
+        if (!t.empty() && hip->firmar(t, false, r.fir)) { r.con_firma = true; m.sucia = true; }
+        ++hechas;
+    }
+    if (hechas) ajustar(m);   // cada firma suma 32 B: respetar el presupuesto
+    return faltan;
+}
+
 motor::motor(llama_model * m, int n_threads, std::vector<region> rs) : model(m), regs(std::move(rs)) {
     if (regs.empty()) regs = regiones_por_defecto();
     if (regs.size() > 32) regs.resize(32);
@@ -393,10 +508,26 @@ motor::motor(llama_model * m, int n_threads, std::vector<region> rs) : model(m),
     ctx = llama_init_from_model(model, cp);
 
     // Huella: si cambia el modelo o las regiones, los códigos guardados no sirven.
+    // Huella: VOCABULARIO + regiones. Con el diccionario de tokens, un recuerdo solo depende del
+    // vocabulario, así que cambiar a otro modelo de la misma familia (0.5B -> 3B, o el cerebelo)
+    // conserva la memoria. Los recuerdos compactos (rANS) dependen del modelo exacto: si no coinciden,
+    // su suma de verificación lo detecta y se marcan dañados, sin afectar a los demás.
+    {
+        uint32_t a = 2166136261u, b = 0x9E3779B9u;
+        for (int t = 0; t < n_vocab; ++t) {
+            const char * p = llama_vocab_get_text(vocab, t);
+            for (const char * c = p ? p : ""; *c; ++c) { a = (a ^ (uint8_t) *c) * 16777619u; b = (b ^ (uint8_t) *c) * 2246822519u; }
+            a = (a ^ 0xFFu) * 16777619u; b = (b ^ (uint32_t) t) * 2246822519u;
+        }
+        std::string h = std::to_string(n_vocab);
+        for (auto & r : regs) h += "|" + r.nombre;
+        huella_ = (((uint64_t) (a ^ fnv32(h))) << 32) | (b ^ fnv32(h + "#vocab"));
+    }
+    // Huella anterior (v6.6 y antes: dependía del tamaño del modelo), aceptada al cargar.
     std::string h = std::to_string(n_vocab) + "/" + std::to_string(llama_model_n_embd(model)) + "/" +
                     std::to_string(llama_model_n_layer(model)) + "/" + std::to_string(llama_model_n_params(model));
     for (auto & r : regs) h += "|" + r.nombre;
-    huella_ = ((uint64_t) fnv32(h) << 32) | fnv32(h + "#nai3");
+    huella_vieja_ = ((uint64_t) fnv32(h) << 32) | fnv32(h + "#nai3");
 }
 
 motor::~motor() {
@@ -730,6 +861,38 @@ std::vector<double> motor::puntuar_prediccion(const std::string & texto) {
     return puntuar_prefijos(p, texto);
 }
 
+// ¿Menciona algo técnico? Raíces de palabras (texto normalizado): solo entonces se consulta al cerebelo.
+static bool menciona_tecnico(const std::string & texto) {
+    static const char * R[] = { "program", "codig", "script", "python", "javascript", "typescript", "sql", "html",
+                                "css", "servidor", "compil", "funcion", "variable", "bug", "excepcion", "linux",
+                                "terminal", "comando", "docker", "vulnerab", "hacke", "malware", "firewall",
+                                "algoritm", "software", "kotlin", "swift", "react", "android", "xcode", "json",
+                                "endpoint", "backend", "frontend", "depur", "debug", "framework", "libreria" };
+    static const char * E[] = { "api", "git", "c++", "java", "rust", "bash", "regex", "ssh", "tcp", "dns", "http" };
+    std::string t = normalizar(texto), w;
+    t += ' ';
+    for (char c : t) {
+        if (std::isalnum((unsigned char) c) || c == '+') { w += c; continue; }
+        if (!w.empty()) {
+            for (const char * r : R) if (w.rfind(r, 0) == 0) return true;
+            for (const char * e : E) if (w == e) return true;
+            w.clear();
+        }
+    }
+    return false;
+}
+
+bool motor::es_pregunta_de_codigo(const std::string & texto) {
+    if (parece_codigo(texto)) return true;
+    if (!menciona_tecnico(texto)) return false;   // sin nada técnico, ni se pregunta: responde el principal
+    static const std::vector<std::string> P = {
+        "Pregunta técnica sobre programación, código fuente, software, redes o ciberseguridad informática.",
+        "Pregunta o comentario general sobre la vida, el conocimiento, los sentimientos o cualquier otro tema.",
+    };
+    const std::vector<double> sc = puntuar_prefijos(P, texto);
+    return sc[0] > -1e29 && sc[0] - sc[1] > 2.0;   // margen en nats sobre los primeros 32 tokens
+}
+
 int motor::naturaleza_de(const std::string & texto) {
     if (parece_manipulacion(texto)) return MANIPULACION;
     static const std::vector<std::string> P = {
@@ -884,6 +1047,10 @@ int motor::agregar(memoria & m, const std::string & texto, int region, int rol) 
         r.claves = mejores_claves(pals, rol == DOCUMENTO ? 6 : 4);
         r.check  = check8(tt);
         r.cache  = tt;
+        if (hip && hip->firmar(trozo, false, r.fir)) {   // significado, para buscar sin palabras en común
+            r.con_firma = true;
+            if (m.hip_id != hip->id()) { for (auto & o : m.recuerdos) o.con_firma = false; m.hip_id = hip->id(); }
+        }
         m.recuerdos.push_back(std::move(r));
         ++n;
     }
@@ -967,13 +1134,32 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
     const std::vector<uint16_t> qk = claves_de(consulta);
     const std::set<uint16_t> qs(qk.begin(), qk.end());
 
-    struct cand { memoria * m; size_t i; double score; int hits; bool asociado = false; };
+    struct cand { memoria * m; size_t i; double score; int hits; bool asociado = false; bool por_sentido = false; };
     std::vector<cand> cs;
+    // Hipocampo: la firma de la pregunta, si hay recuerdos con firma del mismo hipocampo
+    firma qf{};
+    bool con_qf = false;
+    if (hip) {
+        for (auto * m : ms) {
+            if (m->hip_id != hip->id()) continue;
+            for (auto & r : m->recuerdos) if (r.con_firma) { con_qf = true; break; }
+            if (con_qf) break;
+        }
+        if (con_qf) con_qf = hip->firmar(consulta, true, qf);
+    }
+    std::vector<cand> sentido;
     for (auto * m : ms) {
+        const bool firmas_validas = con_qf && m->hip_id == hip->id();
         for (size_t i = 0; i < m->recuerdos.size(); ++i) {
+            const recuerdo & r = m->recuerdos[i];
             int hits = 0;
-            for (auto k : m->recuerdos[i].claves) hits += qs.count(k);
-            if (hits > 0) cs.push_back({ m, i, 10.0 * hits + importancia(m->recuerdos[i]), hits });
+            for (auto k : r.claves) hits += qs.count(k);
+            if (hits > 0) { cs.push_back({ m, i, 10.0 * hits + importancia(r), hits }); continue; }
+            // sin palabras en común: entra solo si el significado se parece lo suficiente
+            if (firmas_validas && r.con_firma) {
+                const double sim = similitud(qf, r.fir);
+                if (sim >= umbral_hip) sentido.push_back({ m, i, 20.0 * sim + importancia(r), 0, false, true });
+            }
         }
     }
     // Sin coincidencias no se trae nada: la memoria solo se consulta cuando la pregunta la toca.
@@ -982,6 +1168,9 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
     int max_hits = 0;
     for (auto & c : cs) max_hits = std::max(max_hits, c.hits);
     if (max_hits >= 2) cs.erase(std::remove_if(cs.begin(), cs.end(), [&](auto & c) { return c.hits < max_hits - 1; }), cs.end());
+    std::stable_sort(sentido.begin(), sentido.end(), [](auto & a, auto & b) { return a.score > b.score; });
+    if (sentido.size() > 3) sentido.resize(3);   // por significado: a lo más 3, compiten por puntaje
+    cs.insert(cs.end(), sentido.begin(), sentido.end());
     std::stable_sort(cs.begin(), cs.end(), [](auto & a, auto & b) { return a.score > b.score; });
 
     // Segundo salto (activación propagada): las claves de los mejores recuerdos directos que la
@@ -1061,7 +1250,8 @@ estadisticas motor::medir(const memoria & m) const {
 }
 
 // ---------------------------------------------------------------------------
-// Archivo: "NAIM" v3 | huella | memoria de trabajo | recuerdos
+// Archivo: "NAIM" v4 | huella | id del hipocampo | memoria de trabajo | recuerdos (cada uno con su firma
+// opcional de 32 B). Se leen también los v3 (sin firmas): el hipocampo las calcula en segundo plano.
 // ---------------------------------------------------------------------------
 static void w8 (std::string & b, uint8_t v)  { b += (char) v; }
 static void w16(std::string & b, uint16_t v) { w8(b, v & 0xFF); w8(b, v >> 8); }
@@ -1081,8 +1271,9 @@ struct lector {
 
 bool motor::guardar(const memoria & m, const std::string & ruta) const {
     std::string b = "NAIM";
-    w8(b, 3);
+    w8(b, 4);
     w64(b, huella_);
+    w64(b, m.hip_id);   // v4: hipocampo que calculó las firmas
     const std::string pu = recortar(m.previo_usuario, 4000), pa = recortar(m.previo_asistente, 4000);
     w16(b, (uint16_t) pu.size()); b += pu;
     w16(b, (uint16_t) pa.size()); b += pa;
@@ -1098,6 +1289,8 @@ bool motor::guardar(const memoria & m, const std::string & ruta) const {
         w8(b, r.cod.n_tokens);
         w8(b, (uint8_t) r.cod.palabras.size());
         for (auto p : r.cod.palabras) w32(b, p);
+        w8(b, r.con_firma ? 1 : 0);   // v4: firma de significado (32 B)
+        if (r.con_firma) for (auto x : r.fir) w64(b, x);
     }
     if (cla.activa) {
         b = nai_cifrado::cifrar(cla, b, std::filesystem::path(ruta).filename().string());
@@ -1130,9 +1323,14 @@ bool motor::cargar(memoria & m, const std::string & ruta) const {
         b = std::move(plano);
     }
     lector l{ b };
-    if (l.rs(4) != "NAIM" || l.r8() != 3 || l.r64() != huella_ || !l.ok) return false;
+    if (l.rs(4) != "NAIM") return false;
+    const uint8_t ver = l.r8();   // 3: sin firmas; 4: con firmas del hipocampo
+    if (ver != 3 && ver != 4) return false;
+    const uint64_t hf = l.r64();
+    if ((hf != huella_ && hf != huella_vieja_) || !l.ok) return false;
     memoria n;
     n.presupuesto = m.presupuesto;
+    if (ver >= 4) n.hip_id = l.r64();
     n.previo_usuario   = l.rs(l.r16());
     n.previo_asistente = l.rs(l.r16());
     const uint32_t cnt = l.r32();
@@ -1153,6 +1351,10 @@ bool motor::cargar(memoria & m, const std::string & ruta) const {
         r.cod.n_tokens = l.r8();
         const uint8_t np = l.r8();
         for (int j = 0; j < np; ++j) r.cod.palabras.push_back(l.r32());
+        if (ver >= 4 && l.r8()) {
+            for (auto & x : r.fir) x = l.r64();
+            r.con_firma = true;
+        }
         if (r.region >= regs.size()) r.region = (uint8_t) (regs.size() - 1);
         if (l.ok) n.recuerdos.push_back(std::move(r));
     }
@@ -1171,11 +1373,39 @@ servicio::servicio(llama_model * model, const config & c) : cfg(c) {
     mot = std::make_unique<motor>(model, cfg.n_threads, regs);
     mot->usar_clave(cfg.clave);
     mot->usar_codificacion_modelo(cfg.compacta);
+    if (cfg.modelo_hipocampo) {
+        hip = std::make_unique<hipocampo>(cfg.modelo_hipocampo, cfg.n_threads);
+        if (hip->ok()) mot->usar_hipocampo(hip.get(), cfg.umbral_hipocampo);
+        else { fprintf(stderr, "%s\n", "[NAI] hipocampo: no se pudo crear su contexto; se usa solo la búsqueda por claves"); hip.reset(); }
+    }
     std::error_code ec;
     std::filesystem::create_directories(cfg.directorio, ec);
     biblioteca.presupuesto = cfg.bytes_biblioteca;
     if (mot->ok()) mot->cargar(biblioteca, (std::filesystem::path(cfg.directorio) / "biblioteca.mem").string());
     hilo = std::thread([this] { bucle(); });
+    if (hip) encolar([this] { rellenar(0, true); });
+}
+
+bool servicio::es_pregunta_de_codigo(const std::string & texto) {
+    if (parece_codigo(texto)) return true;          // sin esperar el mutex
+    if (!ok()) return false;
+    std::lock_guard<std::mutex> lk(mtx);
+    return mot->es_pregunta_de_codigo(texto);
+}
+
+void servicio::rellenar(uint64_t s, bool es_biblioteca) {
+    size_t faltan = 0;
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        memoria * m = &biblioteca;
+        if (!es_biblioteca) {
+            auto it = sesiones.find(s);
+            if (it == sesiones.end()) return;   // ya se descargó; se rellena la próxima vez que se cargue
+            m = &it->second;
+        }
+        faltan = mot->rellenar_firmas(*m, 64);
+    }
+    if (faltan) encolar([this, s, es_biblioteca] { rellenar(s, es_biblioteca); });
 }
 
 servicio::~servicio() {
@@ -1204,6 +1434,7 @@ memoria & servicio::sesion_mem(uint64_t s) {
         mot->cargar(m, ruta_sesion(s));
         m.presupuesto = cfg.bytes_sesion;
         it = sesiones.emplace(s, std::move(m)).first;
+        if (hip) encolar([this, s] { rellenar(s, false); });
     }
     it->second.t_acceso = ahora_seg();
     return it->second;

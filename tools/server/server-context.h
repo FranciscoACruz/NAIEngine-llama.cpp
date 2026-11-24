@@ -109,6 +109,9 @@ struct server_context {
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
 
+    // [NAI] ¿la pregunta va para el especialista en código? (sintaxis evidente o el cerebelo lo decide)
+    bool nai_es_pregunta_de_codigo(const std::string & texto) const;
+
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);
 };
