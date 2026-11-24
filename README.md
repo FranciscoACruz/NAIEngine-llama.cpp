@@ -268,7 +268,7 @@ Las líneas `mkdir`, `printf` y `docker run` levantan SearxNG en tu máquina (re
 ./build/bin/nai_medir_capas -m qwen2.5-0.5b-instruct-q4_k_m.gguf -n 64
 ./build/bin/nai_memoria -m qwen2.5-3b-instruct-q4_k_m.gguf -c "lápiz"
 python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 --reps 3
-./build/bin/nai_memoria -m qwen2.5-0.5b-instruct-q4_k_m.gguf --hipocampo Qwen3-Embedding-0.6B-Q8_0.gguf   # calibra --nai-hipocampo-umbral
+./build/bin/nai_memoria -m Qwen3-0.6B-Q8_0.gguf --hipocampo Qwen3-Embedding-0.6B-Q8_0.gguf   # calibra --nai-hipocampo-umbral
 bash tools/nai/probar-nai.sh qwen2.5-0.5b-instruct-q4_k_m.gguf     # prueba completa: compilar, medir, conversar, aprender
 ```
 
@@ -277,9 +277,9 @@ bash tools/nai/probar-nai.sh qwen2.5-0.5b-instruct-q4_k_m.gguf     # prueba comp
 NAI puede repartir el trabajo como las partes de un cerebro (detalle en `docs/RUTA_INFORMACION.md`). Cada pieza es opcional; sin ellas, el modelo principal hace todo.
 
 ```console
-./build/bin/llama-server -m Qwen3-1.7B-Q4_K_M.gguf --port 8080 -fitt 2048 \
+./build/bin/llama-server -m Qwen3-1.7B-Q8_0.gguf --port 8080 -fitt 2048 --reasoning off \
   --nai-sesiones ./sesiones --nai-memoria --nai-sesion-ttl 31536000 \
-  --nai-cerebelo Qwen3-0.6B-Q4_K_M.gguf \
+  --nai-cerebelo Qwen3-0.6B-Q8_0.gguf \
   --nai-hipocampo Qwen3-Embedding-0.6B-Q8_0.gguf \
   --nai-especialista http://localhost:8081
 ```
@@ -290,6 +290,8 @@ NAI puede repartir el trabajo como las partes de un cerebro (detalle en `docs/RU
 | Hipocampo | `--nai-hipocampo FILE` | Un modelo de embeddings relaciona por significado: «mi mascota» encuentra «mi perro» aunque no compartan palabras. Calibra el umbral con `nai_memoria --hipocampo` |
 | Especialista | `--nai-especialista URL` | Las preguntas de código y ciberseguridad técnica van a otro `llama-server` (por ejemplo, Qwen2.5-Coder en el 8081). Si no está corriendo, responde el principal: se arranca solo cuando se necesita |
 | Oído y voz | `tools/nai/nai-voz.sh` | Habla con NAI: graba (sox), transcribe en español (whisper.cpp), envía con una sesión y lee la respuesta (`say` en macOS) |
+
+`--reasoning off` apaga el modo de pensamiento de Qwen3 para que la plática sea fluida; una petición puede pedirlo con `"chat_template_kwargs": {"enable_thinking": true}` (por ejemplo, para lógica o matemáticas). Los modelos: [Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF), [Qwen3-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF), [Qwen3-Embedding-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF).
 
 El especialista se arranca aparte, cuando se necesite:
 

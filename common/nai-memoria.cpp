@@ -413,11 +413,15 @@ hipocampo::hipocampo(llama_model * m, int n_threads) : model(m) {
         cp.no_perf         = true;
         return llama_init_from_model(model, cp);
     };
-    ctx = crear(LLAMA_POOLING_TYPE_UNSPECIFIED);   // la que declara el modelo (Qwen3-Embedding: last)
-    if (ctx && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE) {   // modelo sin pooling: promedio
+    ctx = crear(LLAMA_POOLING_TYPE_UNSPECIFIED);   // la que declara el modelo
+    if (ctx && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE) {
+        // no la declara: los modelos de embeddings tipo decodificador (Qwen3-Embedding) usan el último
+        // token, como pide su documentación (--pooling last); los codificadores (BERT), el promedio
+        const bool decodificador = llama_model_has_decoder(model) && !llama_model_has_encoder(model);
         llama_free(ctx);
-        ctx = crear(LLAMA_POOLING_TYPE_MEAN);
+        ctx = crear(decodificador ? LLAMA_POOLING_TYPE_LAST : LLAMA_POOLING_TYPE_MEAN);
     }
+    if (ctx) ultimo = llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST;
     if (!ctx) return;
     // proyección fija: signos de un generador determinista (la misma en cualquier máquina)
     proy.resize((size_t) 256 * n_embd);
@@ -443,13 +447,16 @@ hipocampo::~hipocampo() {
 bool hipocampo::firmar(const std::string & texto, bool consulta, firma & out) {
     if (!ctx || texto.empty()) return false;
     const std::string t = consulta
-        ? "Instruct: Dada una pregunta, encuentra los recuerdos que ayudan a responderla\nQuery: " + texto
+        ? "Instruct: Given a question, retrieve the memories that help answer it\nQuery: " + texto   // en inglés, como recomienda Qwen
         : texto;
     std::vector<llama_token> tk(t.size() + 16);
     int n = llama_tokenize(vocab, t.c_str(), (int) t.size(), tk.data(), (int) tk.size(), true, false);
     if (n < 0) { tk.resize(-n); n = llama_tokenize(vocab, t.c_str(), (int) t.size(), tk.data(), (int) tk.size(), true, false); }
     if (n <= 0) return false;
-    tk.resize(std::min(n, 512));
+    tk.resize(std::min(n, 511));
+    // con agrupación por el último token, el texto debe cerrar con el token de fin (como en su entrenamiento)
+    const llama_token eos = llama_vocab_eos(vocab);
+    if (ultimo && eos != LLAMA_TOKEN_NULL && tk.back() != eos) tk.push_back(eos);
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_batch b = llama_batch_init((int32_t) tk.size(), 0, 1);
     for (size_t i = 0; i < tk.size(); ++i) {

@@ -6,7 +6,7 @@
 #
 # Por defecto: qwen2.5-0.5b-instruct-q4_k_m.gguf en la carpeta del repo, puerto 8080.
 # Opcional, para probar el cerebro completo:
-#   NAI_CEREBELO=Qwen3-0.6B-Q4_K_M.gguf NAI_HIPOCAMPO=Qwen3-Embedding-0.6B-Q8_0.gguf bash tools/nai/probar-nai.sh
+#   NAI_CEREBELO=Qwen3-0.6B-Q8_0.gguf NAI_HIPOCAMPO=Qwen3-Embedding-0.6B-Q8_0.gguf bash tools/nai/probar-nai.sh Qwen3-1.7B-Q8_0.gguf
 # Pensado para una Mac con 8 GB: compila con -j4 y arranca el servidor con -fitt 2048.
 # Solo detiene el servidor que este script arranca; no cierra nada más.
 
@@ -59,7 +59,7 @@ EXTRA=()
 [ -n "$NAI_HIPOCAMPO" ] && EXTRA+=(--nai-hipocampo "$NAI_HIPOCAMPO")
 ./build/bin/llama-server -m "$MODELO" --port "$PUERTO" -fitt 2048 \
   --nai-sesiones "$SESIONES" --nai-memoria --nai-sesion-ttl 31536000 \
-  --context-shift --nai-desalojo "${EXTRA[@]}" > "$LOG" 2>&1 &
+  --context-shift --nai-desalojo --reasoning off "${EXTRA[@]}" > "$LOG" 2>&1 &
 PID=$!
 trap 'kill $PID 2>/dev/null' EXIT   # al terminar (o con Ctrl+C) se detiene SOLO este servidor
 for i in $(seq 120); do

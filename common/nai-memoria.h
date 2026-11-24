@@ -154,6 +154,7 @@ private:
     llama_context *     ctx   = nullptr;
     int                 n_embd = 0;
     uint64_t            id_ = 0;
+    bool                ultimo = false;   // agrupación por el último token (cierra con EOS)
     std::vector<float>  proy;   // 256 x n_embd, signos aleatorios fijos (SimHash)
 };
 
