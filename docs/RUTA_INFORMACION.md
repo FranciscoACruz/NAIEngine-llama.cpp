@@ -73,7 +73,7 @@ sequenceDiagram
     U->>S: mensaje
     S->>M: claves del mensaje
     M-->>S: recuerdos que coinciden + 1 asociado opcional<br/>(nada si la pregunta no toca la memoria)
-    S->>S: sistema + recuerdos + últimos 3 turnos + mensaje<br/>(se recorta si no cabe; nunca se rechaza)
+    S->>S: sistema + recuerdos + últimos 3 turnos + mensaje<br/>(se recorta si no cabe, nunca se rechaza)
     S->>P: prompt
     P-->>U: respuesta
     S-)M: en segundo plano: guardar el turno<br/>(guardián, región, codificar)
