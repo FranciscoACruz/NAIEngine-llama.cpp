@@ -514,6 +514,20 @@ static void test_cuentas() {
     std::printf("%s\n", "[test-nai] cuentas OK (dueño, invitados, tokens, bloqueo, cifrado)");
 }
 
+static void test_bucle() {
+    std::string b = "Para empezar, la novela abre en un salón de San Petersburgo en 1805. ";
+    for (int i = 0; i < 40; ++i) b += "Nikolái I, Larisa, ";
+    NAI_CHECK(nai_mem::periodo_de_bucle(b) == std::string("Nikolái I, Larisa, ").size());
+    std::string t = "Natasha baila en el baile de año nuevo. ";
+    for (int i = 0; i < 30; ++i) t += "Capítulo " + std::to_string(i + 1) + ": la familia Rostov recibe noticias del frente. ";
+    NAI_CHECK(nai_mem::periodo_de_bucle(t) == 0);                       // repetitivo pero no idéntico: no es bucle
+    NAI_CHECK(nai_mem::periodo_de_bucle("ja ja ja ja ja ja ja ja ja ja") == 0);   // corto: no es bucle
+    std::string c = "codigo: ";
+    for (int i = 0; i < 6; ++i) c += "x = x + 1; ";
+    NAI_CHECK(nai_mem::periodo_de_bucle(c) == 0);                       // pocas repeticiones
+    std::printf("%s\n", "[test-nai] anti-bucle OK");
+}
+
 int main() {
     test_entropia();
     test_memoria();
@@ -524,6 +538,7 @@ int main() {
     test_hash();
     test_cuentas();
     test_firma();
+    test_bucle();
     test_sorpresa();
     test_pendientes();
     test_mapa_masa();

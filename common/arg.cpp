@@ -1758,6 +1758,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_CEREBELO"));
     add_opt(common_arg(
+        {"--nai-sin-urls"},
+        "[NAI] no abrir las URL que el usuario escribe en la plática. Por defecto, con --nai-memoria, NAI lee "
+        "cada URL del mensaje (como máximo 2), responde con su contenido y la aprende en la biblioteca",
+        [](common_params & params) {
+            params.nai_leer_urls = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_SIN_URLS"));
+    add_opt(common_arg(
+        {"--nai-anti-bucle"}, "N",
+        string_format("[NAI] corta la generación cuando la salida repite el mismo fragmento N veces seguidas "
+                      "(bucle de repetición de modelos chicos con respuestas largas); 0 = apagado (default: %d)",
+                      params.nai_anti_bucle),
+        [](common_params & params, int value) {
+            params.nai_anti_bucle = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_ANTI_BUCLE"));
+    add_opt(common_arg(
         {"--nai-especialista"}, "URL",
         "[NAI] llama-server especialista en código (p. ej. http://localhost:8081 con Qwen2.5-Coder): las "
         "preguntas de programación o ciberseguridad técnica se le envían. Si no está corriendo, responde "

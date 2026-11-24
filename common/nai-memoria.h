@@ -64,6 +64,11 @@ bool parece_manipulacion(const std::string & texto);
 // Sintaxis de código evidente (bloques ```, #include, def ...(), etiquetas...), buscada como palabras
 // completas y con contexto ("select ... from", "git clone"): "digit" o "please select" no cuentan.
 bool parece_codigo(const std::string & texto);
+// Bucle de repetición al final del texto: un mismo fragmento (de 4 a 300 caracteres) repetido de forma
+// exacta al menos `veces` veces seguidas, cubriendo al menos `min_total` caracteres. Devuelve la longitud
+// del fragmento, o 0 si no hay bucle. Lo usa el servidor para cortar la generación y el guardián para
+// no guardar ni reentrenar texto degenerado.
+size_t periodo_de_bucle(const std::string & texto, int veces = 8, size_t min_total = 300);
 // Comandos de consola o inyección (sudo, rm -rf, curl | sh, $(...), DROP TABLE, <script>, ' OR 1=1...).
 // Con el login activo, solo el dueño puede enviarlos (sistema inmune: los invitados no modifican nada).
 bool parece_comando(const std::string & texto);
@@ -168,6 +173,7 @@ private:
     uint64_t            id_ = 0;
     bool                ultimo = false;   // agrupación por el último token (cierra con EOS)
     std::vector<float>  proy;   // 256 x n_embd, signos aleatorios fijos (SimHash)
+    std::mutex          mtx_h;  // lo usan la pregunta (al responder) y el fondo (al guardar)
 };
 
 class motor {
@@ -182,6 +188,14 @@ public:
     // Agrega un texto (se parte en trozos) en una región; region < 0 = clasificar con el modelo.
     // Devuelve el número de recuerdos agregados.
     int agregar(memoria & m, const std::string & texto, int region = -1, int rol = DOCUMENTO, bool privado = false);
+    // agregar = incorporar(m, construir(...)). construir hace el trabajo pesado (guardián, región,
+    // codificar, firma) SIN tocar ninguna memoria; incorporar es el instante de agregarlos (lo único
+    // que necesita el candado de la memoria). Así una pregunta no espera al trabajo de fondo.
+    std::vector<recuerdo> construir(const std::string & texto, int region = -1, int rol = DOCUMENTO, bool privado = false);
+    int incorporar(memoria & m, std::vector<recuerdo> && rs);
+    // El servicio instala aquí "esperar mientras alguien espera respuesta": construir la llama entre
+    // trozos, así el trabajo de fondo cede el paso a cada pregunta nueva en lugar de competir con ella.
+    std::function<void()> ceder;
 
     // Reconstruye el texto del nivel actual de un recuerdo.
     const std::string & texto(recuerdo & r);
@@ -267,7 +281,8 @@ private:
     std::vector<double>      calib;   // puntaje de cada región con texto vacío
     std::vector<llama_token> cab_tok; // encabezado fijo del clasificador (instrucción + temas)
     std::vector<uint8_t>     cab_kv;  // su KV: restaurarlo es una copia, no volver a evaluarlo
-    size_t                   n_rechazados = 0;
+    std::atomic<size_t>      n_rechazados{0};
+    std::recursive_mutex     mtx_ctx;   // el contexto del modelo: lo usa el fondo; buscar recuerdos no lo necesita
 };
 
 // Partir un texto largo en trozos de hasta max_chars, respetando párrafos y oraciones.
@@ -353,7 +368,7 @@ private:
     std::mutex                         mtx_cola;
     std::condition_variable            cv;
     std::deque<std::function<void()>>  cola;        // turnos y firmas (en RAM, rápidos)
-    bool                               salir = false;
+    std::atomic<bool>                  salir{false};
     std::atomic<bool>                  salir_rapido{false};
     std::thread                        hilo;
     std::atomic<int>                   activas{0};  // peticiones generando

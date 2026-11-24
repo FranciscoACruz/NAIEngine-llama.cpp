@@ -326,6 +326,18 @@ bool parece_pregunta(const std::string & texto) {
     return false;
 }
 
+size_t periodo_de_bucle(const std::string & s, int veces, size_t min_total) {
+    const size_t n = s.size();
+    for (size_t p = 4; p <= 300; ++p) {
+        const size_t largo = std::max((size_t) veces * p, min_total);
+        if (largo + p > n) break;   // hace falta al menos `largo` caracteres periódicos
+        size_t k = 1;
+        while (k <= largo && s[n - k] == s[n - k - p]) ++k;
+        if (k > largo) return p;
+    }
+    return 0;
+}
+
 bool parece_privado(const std::string & texto) {
     const std::string n = normalizar_detector(texto);
     static const char * P[] = {
@@ -636,6 +648,7 @@ hipocampo::~hipocampo() {
 
 bool hipocampo::firmar(const std::string & texto, bool consulta, firma & out) {
     if (!ctx || texto.empty()) return false;
+    std::lock_guard<std::mutex> lk(mtx_h);
     const std::string t = consulta
         ? "Instruct: Given a question, retrieve the memories that help answer it\nQuery: " + texto   // en inglés, como recomienda Qwen
         : texto;
@@ -846,6 +859,7 @@ bool desempacar_tokens(const codigo & c, int n_vocab, std::vector<llama_token> &
 
 bool motor::codificar(const std::string & pre, const std::string & texto, codigo & out,
                       std::string * texto_tokens, std::vector<std::pair<std::string, double>> * palabras) {
+    std::lock_guard<std::recursive_mutex> lk_ctx(mtx_ctx);
     std::vector<llama_token> tp = tokenizar(pre, true);
     std::vector<llama_token> t  = tokenizar(texto, false);
     if (t.empty() || tp.empty()) return false;
@@ -914,6 +928,7 @@ bool motor::decodificar(const std::string & pre, const codigo & c, std::string &
         out = detokenizar(t);
         return true;
     }
+    std::lock_guard<std::recursive_mutex> lk_ctx(mtx_ctx);   // rANS: necesita el modelo
     if (c.n_tokens == 0 || c.palabras.size() < 2) return false;
     std::vector<llama_token> tp = tokenizar(pre, true);
     limpiar();
@@ -960,6 +975,7 @@ std::string motor::instruccion_clasificar(const std::string & texto) const {
 }
 
 std::vector<double> motor::puntuar_regiones(const std::string & texto) {
+    std::lock_guard<std::recursive_mutex> lk_ctx(mtx_ctx);
     std::vector<double> sc(regs.size(), -1e30);
     // Lo fijo (instrucción y temas) va primero y el texto al final: entre llamadas solo se evalúa el texto.
     const std::string cab = instruccion_clasificar("");
@@ -1121,6 +1137,7 @@ int motor::naturaleza_de(const std::string & texto) {
 }
 
 std::vector<double> motor::puntuar_prefijos(const std::vector<std::string> & prefijos, const std::string & texto) {
+    std::lock_guard<std::recursive_mutex> lk_ctx(mtx_ctx);
     const size_t R = prefijos.size();
     std::vector<double> sc(R, -1e30);
     if (!ctx || R == 0) return sc;
@@ -1190,6 +1207,7 @@ int motor::clasificar_instruccion(const std::string & texto, bool calibrado) {
 }
 
 std::string motor::generar(const std::string & instruccion, int n_max) {
+    std::lock_guard<std::recursive_mutex> lk_ctx(mtx_ctx);
     if (!ctx) return "";
     std::vector<llama_token> tp = tokenizar(plantilla(instruccion), true);
     if ((int) tp.size() + n_max >= N_CTX_MOTOR) tp.resize(std::max(0, N_CTX_MOTOR - n_max - 1));
@@ -1229,12 +1247,15 @@ static std::vector<uint16_t> mejores_claves(const std::vector<std::pair<std::str
     return res;
 }
 
-int motor::agregar(memoria & m, const std::string & texto, int region, int rol, bool privado) {
-    if (!ctx) return 0;
-    int n = 0;
-    const std::vector<std::string> trozos = trocear(texto);
-    for (size_t k = 0; k < trozos.size(); ++k) {
-        const std::string & trozo = trozos[k];
+std::vector<recuerdo> motor::construir(const std::string & texto, int region, int rol, bool privado) {
+    std::vector<recuerdo> res;
+    if (!ctx) return res;
+    for (const std::string & trozo : trocear(texto)) {
+        if (ceder) ceder();
+        if (periodo_de_bucle(trozo, 4, 200)) {   // texto degenerado: ni memoria ni entrenamiento
+            fprintf(stderr, "%s\n", "[NAI] guardián: trozo descartado por ser un bucle de repetición");
+            continue;
+        }
         // Guardián: un documento que intenta reescribir a NAI no se guarda. En la conversación sí se
         // guarda (es lo que el usuario dijo), marcado, y nunca pasa al reentrenamiento.
         const int nat = naturaleza_de(trozo);
@@ -1253,19 +1274,32 @@ int motor::agregar(memoria & m, const std::string & texto, int region, int rol, 
         r.dia    = hoy();
         std::string tt;
         std::vector<std::pair<std::string, double>> pals;
+        if (ceder) ceder();
         if (!codificar(prefijo(reg, EXACTO, rol), trozo, r.cod, &tt, &pals)) continue;
         r.claves = mejores_claves(pals, rol == DOCUMENTO ? 6 : 4);
         r.check  = check8(tt);
         r.cache  = tt;
-        if (hip && hip->firmar(trozo, false, r.fir)) {   // significado, para buscar sin palabras en común
-            r.con_firma = true;
-            if (m.hip_id != hip->id()) { for (auto & o : m.recuerdos) o.con_firma = false; m.hip_id = hip->id(); }
-        }
-        m.recuerdos.push_back(std::move(r));
-        ++n;
+        r.con_firma = hip && hip->firmar(trozo, false, r.fir);   // significado, para buscar sin palabras en común
+        res.push_back(std::move(r));
     }
-    if (n) { m.sucia = true; ajustar(m); }
+    return res;
+}
+
+int motor::incorporar(memoria & m, std::vector<recuerdo> && rs) {
+    if (rs.empty()) return 0;
+    if (hip && m.hip_id != hip->id()) {   // firmas de otro hipocampo: se recalculan en segundo plano
+        for (auto & o : m.recuerdos) o.con_firma = false;
+        m.hip_id = hip->id();
+    }
+    const int n = (int) rs.size();
+    for (auto & r : rs) m.recuerdos.push_back(std::move(r));
+    m.sucia = true;
+    ajustar(m);
     return n;
+}
+
+int motor::agregar(memoria & m, const std::string & texto, int region, int rol, bool privado) {
+    return incorporar(m, construir(texto, region, rol, privado));
 }
 
 const std::string & motor::texto(recuerdo & r) {
@@ -1662,6 +1696,10 @@ servicio::servicio(llama_model * model, const config & c) : cfg(c) {
     mot = std::make_unique<motor>(model, cfg.n_threads, regs);
     mot->usar_clave(cfg.clave);
     mot->usar_codificacion_modelo(cfg.compacta);
+    mot->ceder = [this] {   // mismo criterio y tope que el bucle: 10 s, para que la cola nunca se atore
+        for (int i = 0; i < 1000 && (activas.load() > 0 || esperando.load() > 0) && !salir_rapido; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
     if (cfg.modelo_hipocampo) {
         hip = std::make_unique<hipocampo>(cfg.modelo_hipocampo, cfg.n_threads);
         if (hip->ok()) mot->usar_hipocampo(hip.get(), cfg.umbral_hipocampo);
@@ -1697,10 +1735,9 @@ servicio::servicio(llama_model * model, const config & c) : cfg(c) {
 }
 
 bool servicio::es_pregunta_de_codigo(const std::string & texto) {
-    if (parece_codigo(texto)) return true;          // sin esperar el mutex
+    if (parece_codigo(texto)) return true;
     if (!ok()) return false;
-    std::lock_guard<std::mutex> lk(mtx);
-    return mot->es_pregunta_de_codigo(texto);
+    return mot->es_pregunta_de_codigo(texto);       // usa el modelo con su propio candado, no el de la memoria
 }
 
 void servicio::rellenar(uint64_t s, bool es_biblioteca) {
@@ -1713,7 +1750,7 @@ void servicio::rellenar(uint64_t s, bool es_biblioteca) {
             if (it == sesiones.end()) return;   // ya se descargó; se rellena la próxima vez que se cargue
             m = &it->second;
         }
-        faltan = mot->rellenar_firmas(*m, 64);
+        faltan = mot->rellenar_firmas(*m, 8);   // tandas cortas: no retener la memoria
     }
     if (faltan && !salir_rapido.load()) encolar([this, s, es_biblioteca] { rellenar(s, es_biblioteca); });
 }
@@ -1805,24 +1842,31 @@ contexto_recordado servicio::preparar(uint64_t s, const std::string & consulta, 
 
 void servicio::registrar_turno(uint64_t s, const std::string & usuario, const std::string & asistente, bool ensenar, bool privado) {
     if (!ok()) return;
-    encolar([this, s, usuario, asistente, ensenar, privado] {
+    {   // los turnos recientes, al instante (es copiar texto): la siguiente pregunta ya los ve aunque el
+        // guardado pesado (clasificar, codificar, firmar) vaya atrasado en la cola
         std::lock_guard<std::mutex> lk(mtx);
-        memoria & m = sesion_mem(s);
+        anillo_turnos(sesion_mem(s), usuario, asistente, cfg.turnos, 3600);   // 3600 < 4000 que admite el archivo
+    }
+    encolar([this, s, usuario, asistente, ensenar, privado] {
+        // lo pesado, sin el candado de la memoria: la siguiente pregunta no espera a este trabajo
         const int reg = mot->clasificar(usuario + "\n" + recortar(asistente, 400));
-        mot->agregar(m, usuario, reg, USUARIO, privado);
-        mot->agregar(m, asistente, reg, ASISTENTE, privado);
-        anillo_turnos(m, usuario, asistente, cfg.turnos, 3600);   // 3600 < 4000 que admite el archivo
-        if (mot->guardar(m, ruta_sesion(s))) m.sucia = false;
-        else fprintf(stderr, "%s\n", "[NAI] memoria: no se pudo guardar la sesión");
-        // La entidad aprende del dueño: lo que enseña (no lo que desahoga ni lo que intenta cambiarla)
+        std::vector<recuerdo> nu = mot->construir(usuario, reg, USUARIO, privado);
+        std::vector<recuerdo> na = mot->construir(asistente, reg, ASISTENTE, privado);
+        // La entidad aprende del dueño: lo que enseña (no lo que desahoga ni lo que intenta cambiarla).
         // Una pregunta no es conocimiento, y el código o los comandos se quedan en su sesión: la biblioteca
         // la consultan todos (también los invitados).
+        std::vector<recuerdo> nb;
         if (ensenar && usuario.size() >= 40 && !parece_pregunta(usuario) && !parece_codigo(usuario) && !parece_comando(usuario)) {
             const int nat = mot->naturaleza_de(usuario);
-            if (nat == CONOCIMIENTO || nat == SABIDURIA) {
-                if (mot->agregar(biblioteca, usuario, reg, USUARIO, privado) > 0) actualizar_estado();
-            }
+            if (nat == CONOCIMIENTO || nat == SABIDURIA) nb = mot->construir(usuario, reg, USUARIO, privado);
         }
+        std::lock_guard<std::mutex> lk(mtx);
+        memoria & m = sesion_mem(s);
+        mot->incorporar(m, std::move(nu));
+        mot->incorporar(m, std::move(na));
+        if (mot->guardar(m, ruta_sesion(s))) m.sucia = false;
+        else fprintf(stderr, "%s\n", "[NAI] memoria: no se pudo guardar la sesión");
+        if (mot->incorporar(biblioteca, std::move(nb)) > 0) actualizar_estado();
     });
 }
 
@@ -1906,8 +1950,9 @@ bool servicio::trabajar_tarea() {
         t->cargada = true;
     }
     if (t->hecho < t->trozos.size()) {
+        std::vector<recuerdo> rs = mot->construir(t->trozos[t->hecho], t->region, DOCUMENTO, t->privado);   // sin el candado
         std::lock_guard<std::mutex> lk(mtx);
-        mot->agregar(biblioteca, t->trozos[t->hecho], t->region, DOCUMENTO, t->privado);
+        mot->incorporar(biblioteca, std::move(rs));
         {
             std::lock_guard<std::mutex> lc(mtx_cola);
             t->hecho++;

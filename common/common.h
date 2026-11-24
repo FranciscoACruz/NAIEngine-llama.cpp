@@ -576,6 +576,8 @@ struct common_params {
     std::string nai_cerebelo;                     // [NAI] modelo chico para la memoria, el guardián y la clasificación
     std::string nai_hipocampo;                    // [NAI] modelo de embeddings para relacionar recuerdos por significado
     float       nai_hipocampo_umbral = 0.5f;      // [NAI] similitud mínima (0..1) para traer un recuerdo por significado
+    bool        nai_leer_urls        = true;      // [NAI] leer (y aprender) las URL que el usuario escribe en la plática
+    int         nai_anti_bucle       = 8;         // [NAI] cortar la generación si un fragmento se repite N veces (0 = apagado)
     std::string nai_especialista;                 // [NAI] URL de un llama-server especialista en código (bajo demanda)
     int64_t     nai_biblioteca_bytes = 8 << 20;   // [NAI] tamaño fijo de la biblioteca compartida (documentos)
     std::string nai_regiones;               // [NAI] archivo de regiones "peso|tema|semilla" (vacío = por defecto)
