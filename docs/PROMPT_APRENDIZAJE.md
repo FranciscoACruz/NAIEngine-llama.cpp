@@ -46,10 +46,12 @@ Ejemplo: espiritualidad--sabiduria--rumi-el-amor.md
 
 ## 2. Cargar los archivos en NAI
 
-Guarda los archivos en una carpeta y, con el servidor corriendo con `--nai-memoria`, ejecuta desde esa carpeta:
+Guarda los archivos en una carpeta solo para ellos (no en la raíz del repo, donde el `README.md` se aprendería como material) y, con el servidor corriendo con `--nai-memoria`, ejecuta:
 
 ```console
-for f in *.md; do
+mkdir -p ~/nai-aprendizaje
+cd ~/nai-aprendizaje
+for f in *--*.md; do
   region="${f%%--*}"
   grep -v '^NATURALEZA:' "$f" > /tmp/nai-envio.md
   curl -s http://localhost:8080/nai/aprender -H "Content-Type: application/json" -d "{\"archivo\":\"$(base64 -i /tmp/nai-envio.md)\",\"nombre\":\"$f\",\"region\":\"$region\"}"
@@ -57,7 +59,9 @@ for f in *.md; do
 done
 ```
 
+- Solo se envían los archivos con el formato `región--naturaleza--tema.md` (`*--*.md`).
 - La región se toma del nombre del archivo (lo que va antes del primer `--`).
+- `/tmp` ya existe en macOS y Linux; ahí se deja una copia temporal de cada archivo.
 - La línea `NATURALEZA:` se quita antes de enviar, para que no se guarde como si fuera un recuerdo.
 - En Linux, cambia `base64 -i archivo` por `base64 -w0 archivo`.
 - Para ver el avance: `curl http://localhost:8080/nai/memoria`.
