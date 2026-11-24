@@ -270,4 +270,176 @@ inline bool cargar_o_crear(const std::string & ruta, clave & c, std::string & av
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// SHA-256 (FIPS 180-4), HMAC (RFC 2104) y PBKDF2 (RFC 8018) para el login: contraseñas guardadas
+// como PBKDF2-HMAC-SHA256 con sal, y tokens guardados solo como su SHA-256. Verificado con los
+// vectores de FIPS, RFC 4231 y RFC 7914 en tests/test-nai.cpp.
+// ---------------------------------------------------------------------------
+class sha256 {
+public:
+    sha256() { reiniciar(); }
+    void reiniciar() {
+        static const uint32_t H0[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+        memcpy(h, H0, sizeof(h));
+        n = 0; total = 0;
+    }
+    void actualizar(const void * datos, size_t len) {
+        const uint8_t * p = (const uint8_t *) datos;
+        total += len;
+        while (len > 0) {
+            const size_t t = 64 - n < len ? 64 - n : len;
+            memcpy(buf + n, p, t);
+            n += t; p += t; len -= t;
+            if (n == 64) { bloque(buf); n = 0; }
+        }
+    }
+    void terminar(uint8_t out[32]) {
+        const uint64_t bits = total * 8;
+        const uint8_t uno = 0x80, cero = 0;
+        actualizar(&uno, 1);
+        while (n != 56) actualizar(&cero, 1);
+        uint8_t l[8];
+        for (int i = 0; i < 8; ++i) l[i] = (uint8_t) (bits >> (56 - 8 * i));
+        actualizar(l, 8);
+        for (int i = 0; i < 8; ++i) {
+            out[4 * i] = (uint8_t) (h[i] >> 24); out[4 * i + 1] = (uint8_t) (h[i] >> 16);
+            out[4 * i + 2] = (uint8_t) (h[i] >> 8); out[4 * i + 3] = (uint8_t) h[i];
+        }
+    }
+private:
+    static uint32_t ror(uint32_t x, int c) { return (x >> c) | (x << (32 - c)); }
+    void bloque(const uint8_t * b) {
+        static const uint32_t K[64] = {
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 };
+        uint32_t w[64];
+        for (int i = 0; i < 16; ++i) w[i] = (uint32_t) b[4 * i] << 24 | (uint32_t) b[4 * i + 1] << 16 | (uint32_t) b[4 * i + 2] << 8 | b[4 * i + 3];
+        for (int i = 16; i < 64; ++i) {
+            const uint32_t s0 = ror(w[i - 15], 7) ^ ror(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            const uint32_t s1 = ror(w[i - 2], 17) ^ ror(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+        uint32_t a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+        for (int i = 0; i < 64; ++i) {
+            const uint32_t t1 = hh + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i];
+            const uint32_t t2 = (ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c));
+            hh = g; g = f; f = e; e = d + t1; d = c; c = bb; bb = a; a = t1 + t2;
+        }
+        h[0] += a; h[1] += bb; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+    }
+    uint32_t h[8];
+    uint8_t  buf[64];
+    size_t   n = 0;
+    uint64_t total = 0;
+};
+
+inline std::string sha256_de(const std::string & s) {
+    sha256 x;
+    x.actualizar(s.data(), s.size());
+    uint8_t o[32];
+    x.terminar(o);
+    return std::string((const char *) o, 32);
+}
+
+inline void hmac_sha256(const uint8_t * clave_, size_t n_clave, const uint8_t * msg, size_t n_msg, uint8_t out[32]) {
+    uint8_t k[64] = {};
+    if (n_clave > 64) { sha256 x; x.actualizar(clave_, n_clave); x.terminar(k); }
+    else memcpy(k, clave_, n_clave);
+    uint8_t ip[64], op[64];
+    for (int i = 0; i < 64; ++i) { ip[i] = k[i] ^ 0x36; op[i] = k[i] ^ 0x5c; }
+    uint8_t in[32];
+    sha256 a; a.actualizar(ip, 64); a.actualizar(msg, n_msg); a.terminar(in);
+    sha256 b; b.actualizar(op, 64); b.actualizar(in, 32); b.terminar(out);
+}
+
+// PBKDF2-HMAC-SHA256. Las claves internas (ipad/opad) se precalculan una vez: cada iteración
+// cuesta dos compresiones de SHA-256, no cuatro.
+inline void pbkdf2_sha256(const std::string & pass, const uint8_t * sal, size_t n_sal, uint32_t iter, uint8_t * out, size_t n_out) {
+    uint8_t k[64] = {};
+    if (pass.size() > 64) { sha256 x; x.actualizar(pass.data(), pass.size()); x.terminar(k); }
+    else memcpy(k, pass.data(), pass.size());
+    uint8_t ip[64], op[64];
+    for (int i = 0; i < 64; ++i) { ip[i] = k[i] ^ 0x36; op[i] = k[i] ^ 0x5c; }
+    sha256 base_i, base_o;
+    base_i.actualizar(ip, 64);
+    base_o.actualizar(op, 64);
+    auto prf = [&](const uint8_t * m, size_t nm, uint8_t r[32]) {
+        uint8_t in[32];
+        sha256 a = base_i; a.actualizar(m, nm); a.terminar(in);
+        sha256 b = base_o; b.actualizar(in, 32); b.terminar(r);
+    };
+    for (uint32_t bloque_ = 1; n_out > 0; ++bloque_) {
+        std::string m((const char *) sal, n_sal);
+        m += (char) (bloque_ >> 24); m += (char) (bloque_ >> 16); m += (char) (bloque_ >> 8); m += (char) bloque_;
+        uint8_t u[32], t[32];
+        prf((const uint8_t *) m.data(), m.size(), u);
+        memcpy(t, u, 32);
+        for (uint32_t i = 1; i < iter; ++i) {
+            prf(u, 32, u);
+            for (int j = 0; j < 32; ++j) t[j] ^= u[j];
+        }
+        const size_t c = n_out < 32 ? n_out : 32;
+        memcpy(out, t, c);
+        out += c; n_out -= c;
+    }
+}
+
+// Bytes aleatorios del sistema (random_device usa /dev/urandom o el generador del sistema operativo).
+inline void aleatorio(uint8_t * out, size_t n) {
+    std::random_device rd;
+    for (size_t i = 0; i < n; i += 4) {
+        const uint32_t v = rd();
+        for (size_t j = 0; j < 4 && i + j < n; ++j) out[i + j] = (uint8_t) (v >> (8 * j));
+    }
+}
+
+inline bool iguales_tiempo_constante(const std::string & a, const std::string & b) {
+    if (a.size() != b.size()) return false;
+    uint8_t d = 0;
+    for (size_t i = 0; i < a.size(); ++i) d |= (uint8_t) (a[i] ^ b[i]);
+    return d == 0;
+}
+
+inline std::string a_hex(const std::string & b) {
+    static const char * H = "0123456789abcdef";
+    std::string s;
+    for (unsigned char c : b) { s += H[c >> 4]; s += H[c & 15]; }
+    return s;
+}
+
+inline std::string de_hex(const std::string & s) {
+    auto v = [](char ch) -> int {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        return -1;
+    };
+    std::string r;
+    for (size_t i = 0; i + 1 < s.size(); i += 2) {
+        const int a = v(s[i]), b = v(s[i + 1]);
+        if (a < 0 || b < 0) return "";
+        r += (char) (a * 16 + b);
+    }
+    return r;
+}
+
+// base64url sin relleno (tokens que viajan en cabeceras HTTP)
+inline std::string base64url(const uint8_t * d, size_t n) {
+    static const char * A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    std::string r;
+    for (size_t i = 0; i < n; i += 3) {
+        const uint32_t v = (uint32_t) d[i] << 16 | (i + 1 < n ? (uint32_t) d[i + 1] << 8 : 0) | (i + 2 < n ? d[i + 2] : 0);
+        r += A[(v >> 18) & 63]; r += A[(v >> 12) & 63];
+        if (i + 1 < n) r += A[(v >> 6) & 63];
+        if (i + 2 < n) r += A[v & 63];
+    }
+    return r;
+}
+
 } // namespace nai_cifrado

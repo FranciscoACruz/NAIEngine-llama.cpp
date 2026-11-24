@@ -18,6 +18,7 @@
 #include "../../src/llama-ext.h" // [NAI] API de masa semántica / desalojo
 #include "../../src/nai-session-table.hpp" // [NAI] sesiones persistentes
 #include "nai-memoria.h" // [NAI] memoria reconstructiva por regiones
+#include "nai-cuentas.h" // [NAI] cuentas y tokens (--nai-login)
 #include "llama-cpp.h"   // [NAI] llama_model_ptr (cerebelo, hipocampo)
 #include "nai-lector.h"  // [NAI] lectura de documentos y URLs
 #include "nai-cifrado.h" // [NAI] cifrado de sesiones y memorias
@@ -949,6 +950,7 @@ public:
     }
 
     ~server_context_impl() {
+        nai_cuentas::activar(nullptr);   // [NAI] nadie más valida tokens con un gestor que se va a liberar
         nai_traza_cerrar(); // [NAI]
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
@@ -1104,6 +1106,7 @@ private:
     int64_t              nai_ttl = 86400;
     nai::ClaveSesion     nai_clave;   // clave secreta del hash (archivo .nai-clave en nai_dir)
     nai_cifrado::clave   nai_cla;     // --nai-cifrado: clave de cifrado de los archivos de sesión
+    std::unique_ptr<nai_cuentas::gestor> nai_cuentas_g;   // --nai-login
 
     uint64_t nai_handle(const std::string & id) const {
         return nai::hash_sesion(id, nai_clave);
@@ -1698,6 +1701,25 @@ private:
         // [NAI] sesiones persistentes
         nai_sesiones_init();
 
+        // [NAI] cuentas: el dueño y sus invitados (--nai-login)
+        if (params_base.nai_login && !nai_cuentas_g) {
+            if (nai_dir.empty()) {
+                SRV_ERR("%s\n", "[NAI] --nai-login requiere --nai-sesiones DIR: la API queda CERRADA (solo /health)");
+            } else {
+                nai_cuentas_g = std::make_unique<nai_cuentas::gestor>(nai_dir, nai_cla, params_base.nai_token_dias);
+                nai_cuentas::activar(nai_cuentas_g.get());
+                if (nai_cuentas_g->hay_cuentas()) {
+                    SRV_INF("%s\n", "[NAI] login activo: la API exige token (POST /nai/login)");
+                } else {
+                    SRV_WRN("%s\n", "[NAI] login activo y sin cuentas: crea al dueño DESDE ESTA MÁQUINA con "
+                                     "POST /nai/configurar {\"usuario\", \"contrasena\"}; mientras tanto nada más responde");
+                }
+                if (!nai_cla.activa) {
+                    SRV_WRN("%s\n", "[NAI] cuentas.dat sin cifrar (usa --nai-cifrado): guarda solo hashes PBKDF2, pero conviene cifrarlo");
+                }
+            }
+        }
+
         // [NAI] memoria reconstructiva por regiones
         if (params_base.nai_memoria) {
             if (nai_dir.empty()) {
@@ -1712,6 +1734,8 @@ private:
                 cfg.ruta_regiones    = params_base.nai_regiones;
                 cfg.clave            = nai_cla;
                 cfg.compacta         = params_base.nai_memoria_compacta;
+                cfg.parte_chars      = (size_t) params_base.nai_parte_chars;
+                cfg.cola_max_chars   = (size_t) params_base.nai_cola_chars;
                 auto cargar_aux = [&](const std::string & ruta, const char * papel) -> llama_model * {
                     if (ruta.empty()) return nullptr;
                     llama_model * m = llama_model_load_from_file(ruta.c_str(), llama_model_default_params());
@@ -2706,7 +2730,8 @@ private:
         if (nai_memoria && !slot.task->is_child() && !slot.task->params.nai_session.empty() &&
             !slot.task->params.nai_mem_usuario.empty()) {
             nai_memoria->registrar_turno(nai_handle(slot.task->params.nai_session),
-                                         slot.task->params.nai_mem_usuario, slot.generated_text);
+                                         slot.task->params.nai_mem_usuario, slot.generated_text,
+                                         slot.task->params.nai_mem_ensenar, slot.task->params.nai_mem_privado);
             SLT_INF(slot, "[NAI] memoria: turno de la sesión %s en cola para guardarse\n",
                     nai_etiqueta(slot.task->params.nai_session).c_str());
         }
@@ -4762,6 +4787,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.id_slot = json_value(data, "id_slot", -1);
             task.params.nai_session = json_value(data, "nai_session", std::string()); // [NAI]
             task.params.nai_mem_usuario = json_value(data, "nai_mem_usuario", std::string()); // [NAI]
+            task.params.nai_mem_ensenar = json_value(data, "nai_mem_ensenar", false);        // [NAI]
+            task.params.nai_mem_privado = json_value(data, "nai_mem_privado", false);        // [NAI]
             sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat
@@ -4993,7 +5020,7 @@ static std::string nai_texto_mensaje(const json & contenido) {
     return t;
 }
 
-static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json & body, int turnos) {
+static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json & body, int turnos, bool es_dueno) {
     if (!body.contains("messages") || !body.at("messages").is_array()) {
         return;
     }
@@ -5016,7 +5043,7 @@ static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json
             sistema += (sistema.empty() ? "" : "\n") + nai_texto_mensaje(m.contains("content") ? m.at("content") : json());
         }
     }
-    const nai_mem::contexto_recordado rec = mem.preparar(sesion, usuario);
+    const nai_mem::contexto_recordado rec = mem.preparar(sesion, usuario, es_dueno);
     if (!rec.bloque.empty()) {
         sistema += (sistema.empty() ? "" : "\n\n") + rec.bloque;
     }
@@ -5045,6 +5072,69 @@ static void nai_preparar_mensajes(nai_mem::servicio & mem, uint64_t sesion, json
             rec.n_recuerdos, msgs.size(), nuevos.size());
     body["messages"]        = std::move(nuevos);
     body["nai_mem_usuario"] = usuario;
+}
+
+// [NAI] Identidad de quien llama, a partir de su token (el middleware ya lo validó; aquí se vuelve a
+//       leer para saber quién es: nunca se confía en otra cabecera que diga el usuario).
+static nai_cuentas::identidad nai_identidad(const server_http_req & req) {
+    nai_cuentas::gestor * g = nai_cuentas::activo();
+    if (!g) return {};
+    std::string tok;
+    for (const auto & [k, v] : req.headers) {
+        std::string kl = k;
+        for (auto & c : kl) c = (char) std::tolower((unsigned char) c);
+        if (kl == "authorization") { tok = v; break; }
+        if (kl == "x-api-key") tok = v;
+    }
+    if (tok.rfind("Bearer ", 0) == 0) tok = tok.substr(7);
+    return g->validar(tok);
+}
+
+static json nai_error(int code, const std::string & msg, const char * tipo) {
+    return json { { "code", code }, { "message", msg }, { "type", tipo } };
+}
+
+// ¿Algún mensaje (usuario o sistema) trae código, comandos o instrucciones para cambiar a la IA?
+static bool nai_mensajes_reservados(const json & body) {
+    if (!body.contains("messages") || !body.at("messages").is_array()) return false;
+    for (const auto & m : body.at("messages")) {
+        const std::string rol = json_value(m, "role", std::string());
+        if (rol == "assistant" || !m.contains("content")) continue;
+        if (nai_mem::reservado_al_dueno(nai_texto_mensaje(m.at("content")))) return true;
+    }
+    return false;
+}
+
+// Texto de la respuesta de un servidor compatible con OpenAI, en JSON o en SSE (streaming).
+std::string nai_texto_respuesta_oai(const std::string & r) {
+    std::string out;
+    if (r.find("data:") != std::string::npos) {
+        std::istringstream in(r);
+        std::string l;
+        while (std::getline(in, l)) {
+            if (l.rfind("data:", 0) != 0) continue;
+            std::string d = l.substr(5);
+            if (d.find("[DONE]") != std::string::npos) break;
+            try {
+                const json j = json::parse(d);
+                if (j.contains("choices") && !j.at("choices").empty()) {
+                    const json & c = j.at("choices")[0];
+                    if (c.contains("delta") && c.at("delta").contains("content") && c.at("delta").at("content").is_string())
+                        out += c.at("delta").at("content").get<std::string>();
+                }
+            } catch (...) {}
+        }
+        return out;
+    }
+    try {
+        const json j = json::parse(r);
+        if (j.contains("choices") && !j.at("choices").empty()) {
+            const json & c = j.at("choices")[0];
+            if (c.contains("message") && c.at("message").contains("content") && c.at("message").at("content").is_string())
+                out = c.at("message").at("content").get<std::string>();
+        }
+    } catch (...) {}
+    return out;
 }
 
 void server_routes::init_routes() {
@@ -5434,20 +5524,75 @@ void server_routes::init_routes() {
             TASK_RESPONSE_TYPE_OAI_CMPL);
     };
 
-    this->post_chat_completions = [this](const server_http_req & req) {
+    this->post_chat_completions = [this](const server_http_req & req) -> server_http_res_ptr {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = json::parse(req.body);
-        // [NAI] memoria reconstructiva: con la sesión del cliente o, si no manda una (interfaz web,
-        //       clientes OpenAI), con la sesión por defecto: la plática fluye igual en cualquier cliente
+        if (!body.is_object()) {
+            res->error(format_error_response("El cuerpo debe ser un objeto JSON", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        // [NAI] Entidad: con login, cada cuenta conversa en su propia sesión ("u:<usuario>"), pero todas
+        //       consultan la misma biblioteca. Solo el dueño la enseña; los invitados no ven lo privado
+        //       ni pueden enviar código, comandos o instrucciones para cambiar a la IA.
+        const bool privado = json_value(body, "nai_privado", false);
+        body.erase("nai_privado");
+        body.erase("nai_mem_usuario"); body.erase("nai_mem_ensenar"); body.erase("nai_mem_privado");   // solo los pone el servidor
+        bool es_dueno = true;
+        if (params.nai_login) {
+            const nai_cuentas::identidad yo = nai_identidad(req);
+            if (!yo.ok) {
+                res->error(nai_error(401, "Sesión no válida o vencida: inicia sesión de nuevo", "authentication_error"));
+                return res;
+            }
+            es_dueno = yo.es_dueno();
+            if (!es_dueno && nai_mensajes_reservados(body)) {
+                SRV_WRN("[NAI] invitado '%s': mensaje con código, comandos o instrucciones a la IA: rechazado\n", yo.usuario.c_str());
+                res->error(nai_error(403, "Como invitado no puedes enviar código, comandos de consola ni instrucciones "
+                                          "para cambiar a la IA. Pregunta con tus palabras.", "permission_error"));
+                return res;
+            }
+            const std::string sub = json_value(body, "nai_session", std::string());
+            body["nai_session"] = "u:" + yo.usuario + "\n" + (sub.empty() ? std::string("principal") : sub.substr(0, 64));
+        }
+        // [NAI] memoria reconstructiva: con la sesión del cliente o, sin login y si se configuró, con la
+        //       sesión por defecto (interfaz web, clientes OpenAI)
         if (auto mem = std::atomic_load(&ctx_server.nai_memoria)) {
             std::string id = json_value(body, "nai_session", std::string());
-            if (id.empty() && !params.nai_sesion_defecto.empty() && !body.contains("tools")) {
+            if (!params.nai_login && id.empty() && !params.nai_sesion_defecto.empty() && !body.contains("tools")) {
                 id = params.nai_sesion_defecto;
                 body["nai_session"] = id;
             }
+            if (!params.nai_login && !id.empty() && id.size() < 16) {
+                static std::atomic<bool> avisado{ false };
+                if (!avisado.exchange(true)) {
+                    SRV_WRN("%s\n", "[NAI] hay ids de sesión de menos de 16 caracteres: quien los adivine lee esa memoria. "
+                                     "Usa ids largos y aleatorios, o --nai-login");
+                }
+            }
             if (!id.empty()) {
-                nai_preparar_mensajes(*mem, ctx_server.nai_handle(id), body, mem->turnos());
+                nai_preparar_mensajes(*mem, ctx_server.nai_handle(id), body, mem->turnos(), es_dueno);
+                body["nai_mem_ensenar"] = params.nai_login && es_dueno;
+                body["nai_mem_privado"] = privado;
+            }
+        }
+        // [NAI] especialista en código: recibe la conversación ya con la memoria, y su respuesta se guarda
+        if (nai_especialista) {
+            json para_esp = body;
+            const std::string usuario = json_value(body, "nai_mem_usuario", std::string());
+            const std::string id = json_value(body, "nai_session", std::string());
+            for (const char * k : { "nai_session", "nai_mem_usuario", "nai_mem_ensenar", "nai_mem_privado" }) para_esp.erase(k);
+            auto mem = std::atomic_load(&ctx_server.nai_memoria);
+            const uint64_t h = id.empty() ? 0 : ctx_server.nai_handle(id);
+            const bool ensenar = json_value(body, "nai_mem_ensenar", false);
+            auto al_terminar = [mem, h, usuario, ensenar, privado, con = !id.empty() && !usuario.empty()](const std::string & respuesta) {
+                if (con && mem && !respuesta.empty()) {
+                    mem->registrar_turno(h, usuario, respuesta, ensenar, privado);
+                    SRV_INF("%s\n", "[NAI] memoria: turno del especialista en cola para guardarse");
+                }
+            };
+            if (auto r = nai_especialista(req, para_esp, al_terminar)) {
+                return r;
             }
         }
         json body_parsed = oaicompat_chat_params_parse(
@@ -5514,11 +5659,19 @@ void server_routes::init_routes() {
             res->error(format_error_response("La región '" + region + "' no existe", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        const int n = mem->aprender(lr.texto, fuente, region);
-        SRV_INF("[NAI] aprender: %s (%s), %zu caracteres -> %d trozos en cola\n",
-                fuente.c_str(), lr.tipo.c_str(), lr.texto.size(), n);
-        res->ok({ { "aprendiendo", n }, { "caracteres", lr.texto.size() }, { "tipo", lr.tipo }, { "fuente", fuente },
-                  { "nota", "se procesa en segundo plano; consulta GET /nai/memoria para ver el avance" } });
+        const bool privado = json_value(body, "privado", false);
+        const int n = mem->aprender(lr.texto, fuente, region, privado);
+        if (n < 0) {
+            res->error(nai_error(429, "La cola de aprendizaje está llena; espera a que avance (GET /nai/tareas) y reintenta",
+                                 "rate_limit_error"));
+            res->headers["Retry-After"] = "60";
+            return res;
+        }
+        SRV_INF("[NAI] aprender: %s (%s), %zu caracteres -> %d partes en cola%s\n",
+                fuente.c_str(), lr.tipo.c_str(), lr.texto.size(), n, privado ? " (privado)" : "");
+        res->ok({ { "partes", n }, { "caracteres", lr.texto.size() }, { "tipo", lr.tipo }, { "fuente", fuente },
+                  { "privado", privado },
+                  { "nota", "se aprende en segundo plano, parte por parte, sin frenar la conversación; avance en GET /nai/tareas" } });
         return res;
     };
 
@@ -5532,6 +5685,142 @@ void server_routes::init_routes() {
             return res;
         }
         res->ok(json::parse(mem->estado_json()));
+        return res;
+    };
+
+    this->get_nai_tareas = [this](const server_http_req &) {
+        auto res = create_response();
+        auto mem = std::atomic_load(&ctx_server.nai_memoria);
+        if (!mem) {
+            res->error(format_error_response("La memoria NAI no está activa", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+        res->ok(json::parse(mem->tareas_json()));
+        return res;
+    };
+
+    // ---- [NAI] cuentas ------------------------------------------------------------------------
+    auto gestor_o_error = [](server_res_generator & res) -> nai_cuentas::gestor * {
+        nai_cuentas::gestor * g = nai_cuentas::activo();
+        if (!g) res.error(nai_error(404, "El login no está activo (inicia con --nai-login --nai-sesiones DIR)", "not_found_error"));
+        return g;
+    };
+
+    this->post_nai_configurar = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        const json body = json::parse(req.body);
+        std::string err;
+        if (!g->configurar(json_value(body, "usuario", std::string()), json_value(body, "contrasena", std::string()), err)) {
+            res->error(nai_error(g->hay_cuentas() ? 409 : 400, err, "invalid_request_error"));
+            return res;
+        }
+        SRV_INF("[NAI] dueño creado: %s\n", json_value(body, "usuario", std::string()).c_str());
+        res->ok({ { "ok", true }, { "nota", "Dueño creado. Inicia sesión con POST /nai/login" } });
+        return res;
+    };
+
+    this->post_nai_login = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        const json body = json::parse(req.body);
+        const auto r = g->login(json_value(body, "usuario", std::string()), json_value(body, "contrasena", std::string()),
+                                json_value(body, "dispositivo", std::string()).substr(0, 64), req.remote_addr);
+        if (!r.ok) {
+            if (r.espera_seg > 0) {
+                res->error(nai_error(429, r.error, "rate_limit_error"));
+                res->headers["Retry-After"] = std::to_string(r.espera_seg);
+            } else {
+                res->error(nai_error(401, r.error, "authentication_error"));
+            }
+            return res;
+        }
+        res->ok({ { "token", r.token }, { "tipo", "Bearer" }, { "expira", r.expira },
+                  { "rol", r.rol == nai_cuentas::DUENO ? "dueno" : "invitado" } });
+        return res;
+    };
+
+    this->post_nai_logout = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        std::string tok;
+        for (const auto & [k, v] : req.headers) {
+            std::string kl = k;
+            for (auto & c : kl) c = (char) std::tolower((unsigned char) c);
+            if (kl == "authorization") tok = v;
+        }
+        if (tok.rfind("Bearer ", 0) == 0) tok = tok.substr(7);
+        res->ok({ { "ok", g->cerrar(tok) } });
+        return res;
+    };
+
+    this->get_nai_yo = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        if (!gestor_o_error(*res)) return res;
+        const auto yo = nai_identidad(req);
+        if (!yo.ok) { res->error(nai_error(401, "Sesión no válida", "authentication_error")); return res; }
+        json puede = yo.es_dueno()
+            ? json::array({ "conversar", "ensenar", "aprender_documentos", "ver_privados", "codigo_y_comandos", "administrar" })
+            : json::array({ "conversar", "consultar_lo_aprendido" });
+        res->ok({ { "usuario", yo.usuario }, { "rol", yo.es_dueno() ? "dueno" : "invitado" }, { "expira", yo.expira },
+                  { "puede", puede } });
+        return res;
+    };
+
+    this->get_nai_cuentas = [this, gestor_o_error](const server_http_req &) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        res->ok(json::parse(g->listar_json()));
+        return res;
+    };
+
+    this->post_nai_cuentas = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        const json body = json::parse(req.body);
+        std::string err;
+        const std::string u = json_value(body, "usuario", std::string());
+        if (!g->crear(u, json_value(body, "contrasena", std::string()), nai_cuentas::INVITADO, err)) {
+            res->error(nai_error(400, err, "invalid_request_error"));
+            return res;
+        }
+        SRV_INF("[NAI] invitado creado: %s\n", u.c_str());
+        res->ok({ { "ok", true }, { "usuario", u }, { "rol", "invitado" } });
+        return res;
+    };
+
+    this->post_nai_cuentas_borrar = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        const json body = json::parse(req.body);
+        std::string err;
+        if (!g->borrar(json_value(body, "usuario", std::string()), err)) {
+            res->error(nai_error(400, err, "invalid_request_error"));
+            return res;
+        }
+        res->ok({ { "ok", true } });
+        return res;
+    };
+
+    this->post_nai_contrasena = [this, gestor_o_error](const server_http_req & req) {
+        auto res = create_response();
+        auto * g = gestor_o_error(*res);
+        if (!g) return res;
+        const auto yo = nai_identidad(req);
+        if (!yo.ok) { res->error(nai_error(401, "Sesión no válida", "authentication_error")); return res; }
+        const json body = json::parse(req.body);
+        std::string err;
+        if (!g->cambiar_contrasena(yo.usuario, json_value(body, "actual", std::string()), json_value(body, "nueva", std::string()), err)) {
+            res->error(nai_error(400, err, "invalid_request_error"));
+            return res;
+        }
+        res->ok({ { "ok", true }, { "nota", "Contraseña cambiada; tus sesiones abiertas se cerraron. Inicia sesión de nuevo" } });
         return res;
     };
 

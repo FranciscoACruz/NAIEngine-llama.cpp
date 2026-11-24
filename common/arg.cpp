@@ -1785,7 +1785,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--nai-sesion-defecto"}, "ID",
         string_format("[NAI] sesión de memoria para los clientes que no mandan nai_session (interfaz web, "
-                      "clientes OpenAI); vacío = esos clientes no usan memoria (default: %s)", params.nai_sesion_defecto.c_str()),
+                      "clientes OpenAI); vacío = esos clientes no usan memoria. Con --nai-login no se usa: cada cuenta tiene su sesión. "
+                      "Usa un id largo y secreto: quien lo conozca lee esa memoria (default: %s)",
+                      params.nai_sesion_defecto.empty() ? "vacío" : params.nai_sesion_defecto.c_str()),
         [](common_params & params, const std::string & value) {
             params.nai_sesion_defecto = value;
         }
@@ -1838,6 +1840,48 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.nai_cifrado = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_CIFRADO"));
+    add_opt(common_arg(
+        {"--nai-login"},
+        "[NAI] la API exige iniciar sesión: el dueño (creado la primera vez con POST /nai/configurar desde esta "
+        "máquina) enseña, administra y envía código o comandos; los invitados que él crea solo consultan. "
+        "Requiere --nai-sesiones. Con --nai-login las --api-key se ignoran (default: desactivado)",
+        [](common_params & params) {
+            params.nai_login = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_LOGIN"));
+    add_opt(common_arg(
+        {"--nai-token-dias"}, "N",
+        string_format("[NAI] días que dura un token sin usarse; al usarlo se renueva (default: %d)", params.nai_token_dias),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 365) {
+                throw std::invalid_argument("--nai-token-dias debe estar entre 1 y 365");
+            }
+            params.nai_token_dias = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_TOKEN_DIAS"));
+    add_opt(common_arg(
+        {"--nai-parte"}, "N",
+        string_format("[NAI] un texto más largo que N caracteres se aprende en partes de N, una tras otra y "
+                      "guardadas en disco, para no saturar (default: %d)", params.nai_parte_chars),
+        [](common_params & params, int value) {
+            if (value < 1000) {
+                throw std::invalid_argument("--nai-parte debe ser al menos 1000");
+            }
+            params.nai_parte_chars = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_PARTE"));
+    add_opt(common_arg(
+        {"--nai-cola"}, "N",
+        string_format("[NAI] caracteres pendientes máximos en la cola de aprendizaje; más devuelve 429 (default: %lld)",
+                      (long long) params.nai_cola_chars),
+        [](common_params & params, const std::string & value) {
+            const long long v = std::stoll(value);
+            if (v < 10000) {
+                throw std::invalid_argument("--nai-cola debe ser al menos 10000");
+            }
+            params.nai_cola_chars = v;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_COLA"));
     add_opt(common_arg(
         {"--nai-lector-red-local"},
         "[NAI] permitir que POST /nai/aprender lea URLs de la red local o de localhost (default: rechazadas por seguridad)",

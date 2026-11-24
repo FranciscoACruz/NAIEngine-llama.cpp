@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
@@ -105,6 +106,8 @@ int main(int argc, char ** argv) {
     int n_threads = 4;
     bool compacta = false; // [NAI] --compacta: codificar con el modelo
     bool diag     = false; // [NAI] --diag: por qué el clasificador elige cada región
+    bool permitir_sesion  = false; // [NAI] --permitir-sesion: exportar un nai-*.mem (conversación de alguien)
+    bool incluir_privados = false; // [NAI] --incluir-privados: exportar también lo privado (PIN, cuentas...)
     std::string ruta_hip;  // [NAI] --hipocampo: calibrar el umbral de similitud
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -123,6 +126,8 @@ int main(int argc, char ** argv) {
         else if (a == "--clave") ruta_clave = sig();
         else if (a == "--compacta") compacta = true;
         else if (a == "--diag") diag = true;
+        else if (a == "--permitir-sesion") permitir_sesion = true;
+        else if (a == "--incluir-privados") incluir_privados = true;
         else if (a == "--hipocampo") ruta_hip = sig();
         else if (a == "--consulta") { if (!consultas_propias) consultas.clear(); consultas_propias = true; consultas.push_back(sig()); }
         else { fprintf(stderr, "opción desconocida: %s\n", a.c_str()); return 1; }
@@ -150,6 +155,13 @@ int main(int argc, char ** argv) {
         mot.usar_clave(cla);
     }
 
+    // [NAI] exportar es para reentrenar con lo aprendido (la biblioteca). Las sesiones son conversaciones
+    //       de personas: solo con permiso explícito.
+    if (!exportar.empty() && !permitir_sesion &&
+        std::filesystem::path(cargar).filename().string().rfind("nai-", 0) == 0) {
+        fprintf(stderr, "%s es la conversación de una sesión; para exportarla agrega --permitir-sesion\n", cargar.c_str());
+        return 1;
+    }
     memoria mem;
     mem.presupuesto = 1u << 30; // sin límite mientras se mide el costo exacto
     if (!cargar.empty()) {
@@ -164,19 +176,21 @@ int main(int argc, char ** argv) {
             return 1;
         }
         std::ofstream f(exportar);
-        size_t n = 0, danados = 0, manip = 0;
+        size_t n = 0, danados = 0, manip = 0, priv = 0;
         for (auto & r : mem.recuerdos) {
             const std::string t = mot.texto(r);
             if (r.danado || t.empty()) { danados++; continue; }
             if (r.natur == MANIPULACION) { manip++; continue; }   // nunca llega a los pesos
+            if (r.privado && !incluir_privados) { priv++; continue; }   // PIN, cuentas, contraseñas: no a los pesos
             f << "{\"region\":\"" << json_esc(regs[r.region].nombre) << "\",\"peso\":" << regs[r.region].peso
               << ",\"nivel\":\"" << nombre_nivel(r.nivel) << "\",\"rol\":\"" << nombre_rol(r.rol)
               << "\",\"naturaleza\":\"" << nombre_naturaleza(r.natur)
               << "\",\"usos\":" << (int) r.usos << ",\"texto\":\"" << json_esc(t) << "\"}\n";
             n++;
         }
-        printf("exportados %zu recuerdos a %s (%zu no se pudieron reconstruir, %zu omitidos por manipulación)\n",
-               n, exportar.c_str(), danados, manip);
+        printf("exportados %zu recuerdos a %s (%zu no se pudieron reconstruir, %zu omitidos por manipulación, "
+               "%zu privados omitidos%s)\n", n, exportar.c_str(), danados, manip, priv,
+               priv ? "; --incluir-privados para exportarlos" : "");
         llama_model_free(model);
         llama_backend_free();
         return danados == mem.recuerdos.size() ? 1 : 0;

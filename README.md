@@ -247,6 +247,23 @@ mkdir -p ~/.nai && ./build/bin/llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf -
 
 La primera vez se crea la clave (permisos 0600). Respáldala: sin ella las conversaciones guardadas no se recuperan. No la guardes dentro de `./sesiones`.
 
+### 3.5.1 Login: una entidad para la familia
+
+```console
+./build/bin/llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf --nai-sesiones ./sesiones --nai-memoria \
+  --nai-cifrado ~/.nai/clave.hex --nai-login --host 0.0.0.0
+curl -s -X POST http://127.0.0.1:8080/nai/configurar -H 'Content-Type: application/json' \
+  -d '{"usuario":"angelus","contrasena":"una-frase-larga-y-tuya"}'
+curl -s -X POST http://127.0.0.1:8080/nai/login -H 'Content-Type: application/json' \
+  -d '{"usuario":"angelus","contrasena":"una-frase-larga-y-tuya"}'
+```
+
+El dueño (creado solo desde la misma máquina) enseña a la entidad y crea cuentas de invitado para
+parientes y amigos, que consultan lo aprendido desde cualquier dispositivo pero no pueden enseñar,
+administrar, enviar código ni comandos. Lo sensible (PIN, NIP, CLABE, contraseñas, tarjetas,
+saldos) queda privado automáticamente y solo lo ve el dueño. Guía completa, endpoints y
+despliegue local, en casa o central: [docs/API_ACCESO.md](docs/API_ACCESO.md).
+
 ### 3.6 Reentrenamiento por currículo (Mac con Apple Silicon)
 
 ```console
@@ -319,7 +336,11 @@ Para hablar con NAI (macOS): `brew install whisper-cpp sox`, descarga un modelo 
 | Triaje (CLI) | `--nai-triaje` | apagado | Solo pide aclaración | Detecta peticiones cortas y ambiguas y pregunta antes de generar |
 | Memoria reconstructiva | `--nai-memoria` (requiere `--nai-sesiones DIR`) | apagada | Cambia lo que ve el modelo: recuerdos en lugar del historial | La conversación no se acumula en el KV cache; se guarda comprimida con el modelo en una memoria fija por regiones |
 | Tamaño de la memoria por sesión | `--nai-memoria-bytes N` | `16384` | — | Presupuesto fijo de cada sesión |
-| Sesión por defecto | `--nai-sesion-defecto ID` | `web` | — | Sesión de memoria para clientes sin `nai_session` (interfaz web, clientes OpenAI); vacío = sin memoria |
+| Sesión por defecto | `--nai-sesion-defecto ID` | vacío (sin memoria) | — | Sesión de memoria para clientes sin `nai_session` (interfaz web, clientes OpenAI). Antes era `web` y todos esos clientes compartían memoria. Usa un id largo y secreto; con `--nai-login` no se usa |
+| Login y roles | `--nai-login` (requiere `--nai-sesiones DIR`) | apagado | No | La API exige token. Un dueño enseña y administra; los invitados solo conversan y consultan. Ver [docs/API_ACCESO.md](docs/API_ACCESO.md) |
+| Vigencia del token | `--nai-token-dias N` | `30` | — | Días sin uso antes de vencer; al usarlo se renueva |
+| Tamaño de cada tarea de aprendizaje | `--nai-parte N` | `8000` | — | Un texto más largo se aprende en partes de N caracteres, guardadas en `DIR/cola` y procesadas una a una |
+| Límite de la cola de aprendizaje | `--nai-cola N` | `8388608` | — | Caracteres pendientes máximos; más devuelve 429 |
 | Cerebelo | `--nai-cerebelo FILE` | apagado (el principal hace todo) | No | Modelo chico para la memoria, el guardián y la clasificación (§3.8) |
 | Hipocampo | `--nai-hipocampo FILE` | apagado (solo claves) | Agrega recuerdos por significado | Modelo de embeddings; cada recuerdo guarda una firma de 32 B (§5.9) |
 | Umbral del hipocampo | `--nai-hipocampo-umbral F` | `0.5` | — | Similitud mínima para traer un recuerdo sin palabras en común; calíbralo con `nai_memoria --hipocampo` |
@@ -554,7 +575,7 @@ Es la información mutua puntual entre el tema y el texto: cuánto más predecib
 | Conocimiento | Predicción (como la clasificación) | Importancia × 1 | Normal |
 | Sabiduría (filosofía, espiritualidad, vida) | Predicción | Importancia × 1.5 | Entra a la fase 1 con los prioritarios |
 | Desahogo (queja, enojo, presión) | Predicción | Importancia × 0.5: se drena primero | Solo con su contexto («una persona bajo presión, no una verdad sobre la humanidad»), peso 1 y sin preguntas |
-| Manipulación (instrucciones para cambiar a la IA) | Patrones fijos, sin modelo: «ignora tus instrucciones», «nota para la IA», marcas de plantilla, texto invisible | Un documento así no se guarda; en la conversación se guarda marcado | Nunca |
+| Manipulación (instrucciones para cambiar a la IA) | Patrones sin modelo sobre texto normalizado (minúsculas, sin acentos, cirílico/griego llevados al latín, sin invisibles, puntuación colapsada): verbo de anulación a ≤ 5 palabras de un objeto («haz caso omiso de tus reglas», «ignore previous instructions», «esqueça as instruções», «oubliez les consignes»), «nota para la IA», marcas de plantilla, 3+ caracteres invisibles, pedir revelar el «system prompt». Mencionar «jailbreak» o «system prompt» ya no basta | Un documento así no se guarda; en la conversación se guarda marcado | Nunca |
 
 El modelo también aprende a distinguir las cuatro naturalezas (un ejemplo por recuerdo), así que el guardián mejora con cada reentrenamiento. `nai_memoria` mide su precisión con 12 ejemplos etiquetados («naturaleza correcta»), y `GET /nai/memoria` muestra cuántos recuerdos hay de cada naturaleza y cuántos trozos rechazó el guardián.
 
@@ -566,7 +587,11 @@ El modelo también aprende a distinguir las cuatro naturalezas (un ejemplo por r
 | `{"url": "https://..."}` | Descarga (máx. 16 MiB, 5 redirecciones); en páginas HTML se toma el contenido principal y se quitan menús y pies. Rechaza localhost, redes privadas, enlace local y metadatos de nube salvo `--nai-lector-red-local`; la IP validada se fija para la conexión |
 | `{"archivo": "<base64>", "nombre": "x.pdf"}` | Por extensión: txt, md, csv, json, código → directo (Latin-1 se convierte a UTF-8); html → sin etiquetas, scripts ni estilos; pdf → `pdftotext`; docx, doc, rtf, odt, pages → `textutil` (macOS) o `pandoc` |
 
-`GET /nai/memoria` muestra el estado de la biblioteca (recuerdos por nivel, bytes, trozos pendientes).
+**Tareas pequeñas en disco.** Un texto más largo que `--nai-parte` (8000) caracteres se parte y cada parte se guarda en `DIR/cola/<n>.tarea` (cifrada si hay clave). Un solo hilo procesa un trozo a la vez y cede el paso, en este orden, a quien espera recordar, a quien está generando y a los turnos de la conversación; los documentos esperan lo que haga falta. Al apagar, lo que falta de la parte en curso vuelve a su archivo; al arrancar se reanuda. Más de `--nai-cola` caracteres pendientes → 429. `GET /nai/tareas` muestra el avance; `GET /nai/memoria` responde de una copia de las estadísticas sin esperar al motor.
+
+**RAM del motor.** Cada decode del motor pide como máximo 64 salidas (`n_outputs_max = 64`, y `puntuar_prefijos` y las variantes de región se decodifican en tandas): llama.cpp reserva salidas × vocabulario y no lo suelta, así que antes eran ≈ +485 MB tras el primer turno con un vocabulario de 151 936; ahora ≈ 39 MB como máximo (medido: +3 MB tras aprender 50 trozos).
+
+**Privados y archivos ilegibles.** Un recuerdo con datos sensibles (PIN, NIP, CLABE, tarjeta, contraseña, saldo, 8+ dígitos...) se marca privado (bit 7 del byte de región) y solo lo recibe el dueño (ver [docs/API_ACCESO.md](docs/API_ACCESO.md)). Un `.mem` que no se puede leer (otra clave, alterado, otro vocabulario) se aparta como `.ilegible-<fecha>` y nunca se sobrescribe.
 
 **Herramienta de medición:** `nai_memoria -m modelo.gguf` mide precisión de clasificación, reconstrucción exacta, olvido con memoria fija, consultas y cruce de regiones; con `--aprender archivo|URL` prueba la lectura de documentos.
 
@@ -724,6 +749,14 @@ python3 tools/nai/nai_bench.py -m modelo.gguf --carga-mixta 200 --slots 16 --ctx
 python3 tools/nai/sim/nai_planificador_sim.py --traza nai-bench-logs/traza-tareas.csv --calibrar nai-bench-logs/traza-pasos.csv --capacidad 32768 --slots 16
 ```
 
+### 7.2.1 Matriz de pruebas
+
+```console
+python3 tools/nai/matriz_pruebas.py --modelo qwen2.5-0.5b-instruct-q4_k_m.gguf --cerebelo modelos/Qwen3-0.6B-Q8_0.gguf --hipocampo modelos/Qwen3-Embedding-0.6B-Q8_0.gguf --real
+```
+
+117 casos; resultado de v7.2: 113 OK, 2 hallazgos documentados, 2 que requieren modelo real ([docs/MATRIZ_PRUEBAS.md](docs/MATRIZ_PRUEBAS.md)).
+
 ### 7.3 Calidad
 
 - **Perplejidad:** `./build/bin/llama-perplexity -m modelo.gguf -f texto.txt` con y sin el flag NAI.
@@ -781,7 +814,10 @@ petición HTTP ──► server-context.cpp
 | `tests/nai-manual/nai_memoria.cpp` | Medición de la memoria reconstructiva (clasificación, exactitud, olvido, consultas, cruce, documentos) |
 | `tests/nai-manual/crear_modelo_prueba.py` | Modelo aleatorio para pruebas |
 | `docs/PLANIFICADOR.md`, `docs/nai-sim/` | Especificación y resultados del planificador |
-| `common/nai-cifrado.h` | ChaCha20-Poly1305 (RFC 8439), formato de archivo cifrado y manejo de la clave |
+| `common/nai-cifrado.h` | ChaCha20-Poly1305 (RFC 8439), formato de archivo cifrado y manejo de la clave; SHA-256, HMAC-SHA256 y PBKDF2 para el login |
+| `common/nai-cuentas.h/.cpp` | Cuentas (dueño e invitados), contraseñas PBKDF2, tokens, bloqueo por intentos, `cuentas.dat` cifrado |
+| `tools/nai/matriz_pruebas.py` | Matriz de 117 casos (arranque, sesiones, biblioteca, red, guardián, búsqueda, especialista, cifrado, API, exportación, recursos, login); informe en [docs/MATRIZ_PRUEBAS.md](docs/MATRIZ_PRUEBAS.md) |
+| `docs/API_ACCESO.md` | Login, roles, entidad, privacidad, endpoints y despliegue |
 | `tools/nai/nai_reentrenar.py` | Reentrenamiento por currículo: fuentes, exportar, datos, entrenar (MLX), medir, convertir |
 | `docs/CARTA_PRIORIDADES.md` | Carta de prioridades (borrador del autor): qué es cada tema prioritario, por qué importa y cómo se relaciona |
 | `docs/nai-fuentes.txt` | Consultas de búsqueda por tema (y URLs o archivos) para la biblioteca |
@@ -891,10 +927,11 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 4. **Borrador de auto-especulación:** duplica ≈ $K/L$ de los pesos en memoria y fue más lento en M1.
 5. **Sesiones:** no cubren multimodal ni especulación. El cifrado es opcional (`--nai-cifrado`).
 6. **Base del fork:** anterior al llama.cpp oficial actual (parser de chat con errores en UTF-8 inválido).
-7. **Memoria reconstructiva:** cada recuerdo nuevo cuesta un paso del modelo por token (clasificar y codificar); en un M1 con 0.5B, un documento de 10 páginas tarda alrededor de un minuto en aprenderse. Los archivos `.mem` solo sirven con el mismo modelo, las mismas regiones y el mismo backend. La búsqueda por claves no entiende sinónimos ("dinero" no encuentra "ahorro"); el respaldo es la región. Calidad de clasificación, ideas y pistas pendiente de medir con Qwen real (`nai_memoria`).
-8. **Planificador:** solo en simulación; falta implementarlo en el servidor.
-9. **Reentrenamiento:** necesita Apple Silicon (MLX) para entrenar; en Linux/CUDA habría que cambiar el paso `entrenar` por PEFT. La calidad depende de las fuentes: con fuentes pobres o generales, el adaptador aprende poco. Probado de punta a punta solo con un modelo de prueba; la medición con Qwen real está pendiente.
-10. **Masa semántica sin $\|W_K x\|_2$:** el factor de la fórmula original del autor sigue pendiente (§5.1).
+7. **Login:** no aplica en modo router (varios modelos). Detrás de un proxy, el bloqueo por IP ve la dirección del proxy (el bloqueo por usuario sigue). Con `--nai-login`, `/completion`, `/v1/responses` y `/v1/messages` quedan solo para el dueño y no usan la memoria; la memoria vive en `/v1/chat/completions`.
+8. **Memoria reconstructiva:** cada recuerdo nuevo cuesta un paso del modelo por token (clasificar y codificar); en un M1 con 0.5B, un documento de 10 páginas tarda alrededor de un minuto en aprenderse. Los archivos `.mem` solo sirven con el mismo modelo, las mismas regiones y el mismo backend. La búsqueda por claves no entiende sinónimos ("dinero" no encuentra "ahorro"); el respaldo es la región. Calidad de clasificación, ideas y pistas pendiente de medir con Qwen real (`nai_memoria`).
+9. **Planificador:** solo en simulación; falta implementarlo en el servidor.
+10. **Reentrenamiento:** necesita Apple Silicon (MLX) para entrenar; en Linux/CUDA habría que cambiar el paso `entrenar` por PEFT. La calidad depende de las fuentes: con fuentes pobres o generales, el adaptador aprende poco. Probado de punta a punta solo con un modelo de prueba; la medición con Qwen real está pendiente.
+11. **Masa semántica sin $\|W_K x\|_2$:** el factor de la fórmula original del autor sigue pendiente (§5.1).
 
 ---
 

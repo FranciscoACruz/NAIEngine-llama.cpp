@@ -3,6 +3,7 @@
 #include "server-http.h"
 #include "server-common.h"
 #include "ui.h"
+#include "nai-cuentas.h"
 
 #include <cpp-httplib/httplib.h>
 
@@ -205,7 +206,64 @@ bool server_http_context::init(const common_params & params) {
         return endpoints;
     }();
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
+    // [NAI] Login: el dueño hace todo; los invitados solo conversan y consultan (sistema inmune: nada
+    //       de lo que envían cambia el proyecto). Sin token válido no hay acceso, salvo lo público.
+    auto nai_negar = [](httplib::Response & res, int status, const std::string & msg, const char * tipo) {
+        res.status = status;
+        res.set_content(safe_json_to_str(json { { "error", { { "message", msg }, { "type", tipo }, { "code", status } } } }),
+                        "application/json; charset=utf-8");
+        return false;
+    };
+    auto middleware_nai_login = [nai_negar](const httplib::Request & req, httplib::Response & res) {
+        static const std::unordered_set<std::string> publicos_nai = { "/nai/login", "/nai/configurar" };
+        if (get_public_endpoints.count(req.path) || publicos_nai.count(req.path)) {
+            if (req.path == "/nai/configurar") {
+                // crear al dueño solo desde esta máquina: nadie en la red se adelanta
+                const std::string & a = req.remote_addr;
+                if (!(a == "127.0.0.1" || a == "::1" || a.rfind("::ffff:127.", 0) == 0)) {
+                    return nai_negar(res, 403, "La primera cuenta (dueño) solo se crea desde la misma máquina (localhost)", "permission_error");
+                }
+            }
+            return true;
+        }
+        nai_cuentas::gestor * g = nai_cuentas::activo();
+        if (!g) {
+            return nai_negar(res, 503, "--nai-login requiere --nai-sesiones DIR; el acceso queda cerrado", "unavailable_error");
+        }
+        std::string tok = req.get_header_value("Authorization");
+        if (tok.empty()) tok = req.get_header_value("X-Api-Key");
+        if (tok.rfind("Bearer ", 0) == 0) tok = tok.substr(7);
+        const nai_cuentas::identidad id = g->validar(tok);
+        if (!id.ok) {
+            res.set_header("WWW-Authenticate", "Bearer");
+            return nai_negar(res, 401, g->hay_cuentas() ? "Inicia sesión: POST /nai/login {\"usuario\", \"contrasena\"} y usa el token como Bearer"
+                                                         : "Aún no hay dueño: créalo desde esta máquina con POST /nai/configurar",
+                             "authentication_error");
+        }
+        if (id.es_dueno()) {
+            return true;
+        }
+        static const std::unordered_set<std::string> invitado_post = {
+            "/v1/chat/completions", "/chat/completions", "/v1/chat/completions/control",
+            "/chat/completions/input_tokens", "/v1/chat/completions/input_tokens",
+            "/nai/logout", "/nai/contrasena",
+        };
+        static const std::unordered_set<std::string> invitado_get = { "/props", "/nai/yo" };
+        const bool permitido = (req.method == "POST" && invitado_post.count(req.path)) ||
+                               (req.method == "GET" && invitado_get.count(req.path));
+        if (!permitido) {
+            SRV_WRN("[NAI] invitado '%s': %s %s denegado\n", id.usuario.c_str(), req.method.c_str(), req.path.c_str());
+            return nai_negar(res, 403, "Tu cuenta es de invitado: puedes conversar y consultar lo que la entidad sabe, "
+                                       "pero no enseñar, administrar ni cambiar nada", "permission_error");
+        }
+        return true;
+    };
+
+    auto middleware_validate_api_key = [api_keys = params.api_keys, nai_login = params.nai_login, middleware_nai_login](
+                                           const httplib::Request & req, httplib::Response & res) {
+        if (nai_login) {
+            return middleware_nai_login(req, res);   // con login las --api-key no abren la puerta
+        }
         // If API key is not set, skip validation
         if (api_keys.empty()) {
             return true;
@@ -587,7 +645,8 @@ void server_http_context::get(const std::string & path, const server_http_contex
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            req.remote_addr
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -634,7 +693,8 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
-            req.is_connection_closed
+            req.is_connection_closed,
+            req.remote_addr
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -651,7 +711,8 @@ void server_http_context::del(const std::string & path, const server_http_contex
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            req.remote_addr
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);

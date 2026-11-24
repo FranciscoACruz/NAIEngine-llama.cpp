@@ -120,6 +120,9 @@ struct server_context {
 // forward declarations
 struct server_res_generator;
 
+// [NAI] texto de una respuesta compatible con OpenAI (JSON o SSE), para guardar el turno del especialista
+std::string nai_texto_respuesta_oai(const std::string & respuesta);
+
 struct server_routes {
     server_routes(const common_params & params, server_context & ctx_server);
 
@@ -160,6 +163,21 @@ struct server_routes {
     server_http_context::handler_t post_lora_adapters;
     server_http_context::handler_t post_nai_aprender; // [NAI]
     server_http_context::handler_t get_nai_memoria;   // [NAI]
+    server_http_context::handler_t get_nai_tareas;    // [NAI] partes pendientes de aprender
+    // [NAI] cuentas (--nai-login)
+    server_http_context::handler_t post_nai_configurar;
+    server_http_context::handler_t post_nai_login;
+    server_http_context::handler_t post_nai_logout;
+    server_http_context::handler_t get_nai_yo;
+    server_http_context::handler_t get_nai_cuentas;
+    server_http_context::handler_t post_nai_cuentas;
+    server_http_context::handler_t post_nai_cuentas_borrar;
+    server_http_context::handler_t post_nai_contrasena;
+
+    // [NAI] especialista en código: lo fija server.cpp. Recibe el cuerpo YA preparado con la memoria;
+    //       si contesta él, devuelve la respuesta (y llama a al_terminar con el texto para guardar el
+    //       turno); si no (no es código o no está vivo), devuelve nullptr y contesta el principal.
+    std::function<server_http_res_ptr(const server_http_req &, const json &, std::function<void(const std::string &)>)> nai_especialista;
 
     // to be used in router mode
     json get_model_info() const;

@@ -57,6 +57,13 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
         error_type error;
         try {
             return func(req);
+        } catch (const json::parse_error & e) {
+            // [NAI] JSON mal formado: es un error de quien envía (400), no del servidor (500)
+            error = ERROR_TYPE_INVALID_REQUEST;
+            message = std::string("JSON inválido: ") + e.what();
+        } catch (const json::type_error & e) {
+            error = ERROR_TYPE_INVALID_REQUEST;
+            message = std::string("Tipo de dato inválido en el JSON: ") + e.what();
         } catch (const std::invalid_argument & e) {
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
@@ -220,6 +227,11 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_slots                  = models_routes->proxy_post;
         routes.post_nai_aprender           = models_routes->proxy_post; // [NAI]
         routes.get_nai_memoria             = models_routes->proxy_get;  // [NAI]
+        routes.get_nai_tareas              = models_routes->proxy_get;  // [NAI]
+        // [NAI] --nai-login no aplica en modo router: cada modelo hijo tendría sus propias cuentas
+        routes.post_nai_configurar = routes.post_nai_login = routes.post_nai_logout = routes.post_nai_cuentas =
+            routes.post_nai_cuentas_borrar = routes.post_nai_contrasena = models_routes->proxy_post;
+        routes.get_nai_yo = routes.get_nai_cuentas = models_routes->proxy_get;
 
         // custom routes for router
         routes.get_props                   = models_routes->get_router_props;
@@ -240,25 +252,22 @@ int llama_server(common_params & params, int argc, char ** argv) {
         } else {
             SRV_INF("[NAI] especialista en código: %s (si no responde, contesta el modelo principal)\n",
                     params.nai_especialista.c_str());
-            auto principal = routes.post_chat_completions;
-            routes.post_chat_completions = [principal, esp, &ctx_server](const server_http_req & req) -> server_http_res_ptr {
+            // Se llama DESPUÉS de preparar la memoria: el especialista recibe los recuerdos y los turnos, y
+            // su respuesta se guarda como cualquier otra (al_terminar).
+            routes.nai_especialista = [esp, &ctx_server](const server_http_req & req, const json & body,
+                                                         std::function<void(const std::string &)> al_terminar) -> server_http_res_ptr {
                 std::string texto;
-                try {
-                    const json body = json::parse(req.body);
-                    if (body.contains("messages") && body.at("messages").is_array()) {
-                        for (const auto & m : body.at("messages")) {   // el último mensaje del usuario
-                            if (m.value("role", "") != "user" || !m.contains("content")) continue;
-                            const auto & c = m.at("content");
-                            texto.clear();
-                            if (c.is_string()) texto = c.get<std::string>();
-                            else if (c.is_array()) for (const auto & p : c) if (p.value("type", "") == "text") texto += p.value("text", "");
-                        }
+                if (body.contains("messages") && body.at("messages").is_array()) {
+                    for (const auto & m : body.at("messages")) {   // el último mensaje del usuario
+                        if (!m.is_object() || m.value("role", "") != "user" || !m.contains("content")) continue;
+                        const auto & c = m.at("content");
+                        texto.clear();
+                        if (c.is_string()) texto = c.get<std::string>();
+                        else if (c.is_array()) for (const auto & p : c) if (p.is_object() && p.value("type", "") == "text") texto += p.value("text", "");
                     }
-                } catch (...) {
-                    return principal(req);
                 }
                 if (texto.empty() || !ctx_server.nai_es_pregunta_de_codigo(texto)) {
-                    return principal(req);
+                    return nullptr;
                 }
                 {   // ¿está corriendo? (bajo demanda: si no, responde el principal)
                     httplib::Client cli(esp.scheme + "://" + common_http_format_host(esp.host) + ":" + std::to_string(esp.port));
@@ -267,13 +276,27 @@ int llama_server(common_params & params, int argc, char ** argv) {
                     auto r = cli.Get("/health");
                     if (!r || r->status != 200) {
                         SRV_WRN("%s\n", "[NAI] pregunta de código, pero el especialista no responde: contesta el principal");
-                        return principal(req);
+                        return nullptr;
                     }
                 }
-                SRV_INF("%s\n", "[NAI] pregunta de código: la responde el especialista");
+                SRV_INF("%s\n", "[NAI] pregunta de código: la responde el especialista (con la memoria)");
                 std::map<std::string, std::string> headers = { { "Content-Type", "application/json" } };
-                return std::make_unique<server_http_proxy>("POST", esp.scheme, esp.host, esp.port, "/v1/chat/completions",
-                                                           headers, req.body, req.files, req.should_stop, 600, 600);
+                auto p = std::make_unique<server_http_proxy>("POST", esp.scheme, esp.host, esp.port, "/v1/chat/completions",
+                                                             headers, body.dump(), req.files, req.should_stop, 600, 600);
+                // copia de lo que pasa (hasta 1 MB) para guardar el turno cuando termine
+                auto acumulado = std::make_shared<std::string>();
+                auto siguiente = p->next;
+                p->next = [siguiente, acumulado](std::string & out) -> bool {
+                    const bool mas = siguiente(out);
+                    if (acumulado->size() + out.size() <= (1u << 20)) *acumulado += out;
+                    return mas;
+                };
+                auto limpiar = p->cleanup;
+                p->cleanup = [limpiar, acumulado, al_terminar]() {
+                    if (limpiar) limpiar();
+                    al_terminar(nai_texto_respuesta_oai(*acumulado));
+                };
+                return p;
             };
         }
     }
@@ -308,6 +331,15 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
     ctx_http.post("/nai/aprender",             ex_wrapper(routes.post_nai_aprender)); // [NAI]
     ctx_http.get ("/nai/memoria",              ex_wrapper(routes.get_nai_memoria));   // [NAI]
+    ctx_http.get ("/nai/tareas",               ex_wrapper(routes.get_nai_tareas));    // [NAI]
+    ctx_http.post("/nai/configurar",           ex_wrapper(routes.post_nai_configurar));      // [NAI] solo localhost, sin cuentas
+    ctx_http.post("/nai/login",                ex_wrapper(routes.post_nai_login));           // [NAI] público
+    ctx_http.post("/nai/logout",               ex_wrapper(routes.post_nai_logout));          // [NAI]
+    ctx_http.get ("/nai/yo",                   ex_wrapper(routes.get_nai_yo));               // [NAI]
+    ctx_http.get ("/nai/cuentas",              ex_wrapper(routes.get_nai_cuentas));          // [NAI] dueño
+    ctx_http.post("/nai/cuentas",              ex_wrapper(routes.post_nai_cuentas));         // [NAI] dueño
+    ctx_http.post("/nai/cuentas/borrar",       ex_wrapper(routes.post_nai_cuentas_borrar));  // [NAI] dueño
+    ctx_http.post("/nai/contrasena",           ex_wrapper(routes.post_nai_contrasena));      // [NAI]
     ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));
     // token counting
     ctx_http.post("/chat/completions/input_tokens",    ex_wrapper(routes.post_chat_completions_tok));

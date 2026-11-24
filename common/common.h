@@ -572,7 +572,7 @@ struct common_params {
     bool        nai_memoria     = false;    // [NAI] memoria reconstructiva por regiones en lugar de acumular el KV
     int64_t     nai_memoria_bytes    = 16384;     // [NAI] tamaño fijo de la memoria de cada sesión
     bool        nai_memoria_compacta = false;     // [NAI] codificar recuerdos con el modelo (compacto, no portable)
-    std::string nai_sesion_defecto   = "web";     // [NAI] sesión de memoria para clientes sin nai_session ("" = sin memoria)
+    std::string nai_sesion_defecto;               // [NAI] sesión de memoria para clientes sin nai_session ("" = sin memoria)
     std::string nai_cerebelo;                     // [NAI] modelo chico para la memoria, el guardián y la clasificación
     std::string nai_hipocampo;                    // [NAI] modelo de embeddings para relacionar recuerdos por significado
     float       nai_hipocampo_umbral = 0.5f;      // [NAI] similitud mínima (0..1) para traer un recuerdo por significado
@@ -581,6 +581,10 @@ struct common_params {
     std::string nai_regiones;               // [NAI] archivo de regiones "peso|tema|semilla" (vacío = por defecto)
     bool        nai_lector_red_local = false; // [NAI] permitir leer URLs de la red local (desactivado por seguridad)
     std::string nai_cifrado;                // [NAI] archivo de clave: cifra sesiones y memorias con ChaCha20-Poly1305
+    bool        nai_login        = false;   // [NAI] cuentas con usuario/contraseña y tokens (dueño + invitados)
+    int32_t     nai_token_dias   = 30;      // [NAI] vigencia de un token sin uso (se renueva al usarlo)
+    int32_t     nai_parte_chars  = 8000;    // [NAI] los textos a aprender se parten en tareas de este tamaño
+    int64_t     nai_cola_chars   = 8 << 20; // [NAI] texto pendiente máximo en la cola de aprendizaje
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 

@@ -61,8 +61,19 @@ const char * nombre_rol(int r);
 const char * nombre_naturaleza(int n);
 // Patrones de inyección de instrucciones (texto normalizado, sin acentos). Determinista y sin modelo.
 bool parece_manipulacion(const std::string & texto);
-// Sintaxis de código evidente (bloques ```, #include, def, =>, etiquetas...). Determinista y sin modelo.
+// Sintaxis de código evidente (bloques ```, #include, def ...(), etiquetas...), buscada como palabras
+// completas y con contexto ("select ... from", "git clone"): "digit" o "please select" no cuentan.
 bool parece_codigo(const std::string & texto);
+// Comandos de consola o inyección (sudo, rm -rf, curl | sh, $(...), DROP TABLE, <script>, ' OR 1=1...).
+// Con el login activo, solo el dueño puede enviarlos (sistema inmune: los invitados no modifican nada).
+bool parece_comando(const std::string & texto);
+// Datos sensibles (PIN, NIP, CLABE, tarjetas, contraseñas, saldos, CURP, números largos...): se guardan
+// como privados y solo los ve el dueño.
+bool parece_privado(const std::string & texto);
+// Preguntas ("¿...?", "explícame...", "how..."): no se enseñan a la entidad, se contestan.
+bool parece_pregunta(const std::string & texto);
+// Lo que un invitado no puede enviar: código, comandos o instrucciones para cambiar a la IA.
+inline bool reservado_al_dueno(const std::string & t) { return parece_codigo(t) || parece_comando(t) || parece_manipulacion(t); }
 
 // Texto codificado. Dos métodos:
 //   tokens (portable, por defecto): IDs de token del vocabulario en enteros de longitud variable.
@@ -99,6 +110,7 @@ struct recuerdo {
     codigo                cod;
     std::string           cache;        // texto reconstruido (solo en RAM, no se guarda)
     bool                  danado = false;
+    bool                  privado = false;  // solo lo ve el dueño (bit 7 del byte de región en el archivo)
     bool                  con_firma = false;
     firma                 fir{};        // significado (hipocampo); vale si con_firma
 
@@ -169,14 +181,17 @@ public:
 
     // Agrega un texto (se parte en trozos) en una región; region < 0 = clasificar con el modelo.
     // Devuelve el número de recuerdos agregados.
-    int agregar(memoria & m, const std::string & texto, int region = -1, int rol = DOCUMENTO);
+    int agregar(memoria & m, const std::string & texto, int region = -1, int rol = DOCUMENTO, bool privado = false);
 
     // Reconstruye el texto del nivel actual de un recuerdo.
     const std::string & texto(recuerdo & r);
 
     // Busca los recuerdos relevantes para una consulta en una o varias memorias.
     // Refuerza los usados (usos++, día de hoy).
-    std::string recordar(std::vector<memoria *> ms, const std::string & consulta, int max_recuerdos, size_t max_chars, int * n_usados);
+    // ocultar_privados: memoria cuyos recuerdos privados no se consideran (la de la entidad cuando
+    // pregunta un invitado; su propia sesión sí le muestra lo suyo).
+    std::string recordar(std::vector<memoria *> ms, const std::string & consulta, int max_recuerdos, size_t max_chars, int * n_usados,
+                         const memoria * ocultar_privados = nullptr);
 
     // Ajusta la memoria a su presupuesto bajando de nivel lo menos importante.
     void ajustar(memoria & m);
@@ -230,6 +245,10 @@ private:
     std::string detokenizar(const std::vector<llama_token> & t) const;
     std::string plantilla(const std::string & usuario) const;
     bool evaluar(const std::vector<llama_token> & t);
+    // Decodifica entradas en lotes de hasta SALIDAS_MAX salidas: llama.cpp reserva un búfer de
+    // salidas x vocabulario completo (151 936 en Qwen) y no lo suelta; con 64 salidas son ~40 MB.
+    struct entrada { llama_token tok; llama_pos pos; llama_seq_id seq; bool salida; };
+    bool decodificar_por_tandas(const std::vector<entrada> & es, const std::function<void(size_t, const float *)> & f);
     void limpiar();   // vacía el KV del motor (y la caché de prefijo)
 
     llama_model *       model = nullptr;
@@ -276,6 +295,8 @@ public:
         bool        compacta         = false;       // true = codificar con el modelo (no portable)
         llama_model * modelo_hipocampo = nullptr;   // embeddings (opcional): relacionar por significado
         float       umbral_hipocampo = 0.5f;
+        size_t      parte_chars      = 8000;        // un documento más largo se parte en tareas de este tamaño
+        size_t      cola_max_chars   = 8u << 20;    // texto pendiente máximo (más: 429, se reintenta después)
     };
 
     servicio(llama_model * model, const config & cfg);
@@ -284,18 +305,24 @@ public:
     int  turnos() const { return cfg.turnos; }
     bool es_pregunta_de_codigo(const std::string & texto);   // para enviar al especialista
 
-    // Antes de responder (sincrónico): recuerdos relevantes + turno anterior.
-    contexto_recordado preparar(uint64_t sesion, const std::string & consulta);
+    // Antes de responder (sincrónico): recuerdos relevantes + turnos anteriores.
+    // es_dueno = false (invitado): no recibe recuerdos privados.
+    contexto_recordado preparar(uint64_t sesion, const std::string & consulta, bool es_dueno = true);
 
     // Después de responder (asíncrono): guarda el turno en la memoria de la sesión.
-    void registrar_turno(uint64_t sesion, const std::string & usuario, const std::string & asistente);
+    // ensenar = true (solo el dueño): lo que dijo el usuario también entra a la memoria de la entidad
+    // (la biblioteca), si es conocimiento o sabiduría; privado = forzar que quede privado.
+    void registrar_turno(uint64_t sesion, const std::string & usuario, const std::string & asistente,
+                         bool ensenar = false, bool privado = false);
 
-    // Aprender un texto en la biblioteca (asíncrono). Devuelve cuántos trozos se encolaron.
-    // region: nombre de la región si la fuente ya la conoce (vacío = el modelo clasifica cada trozo).
-    int aprender(const std::string & texto, const std::string & fuente, const std::string & region = "");
+    // Aprender un texto en la biblioteca. No se procesa de golpe: se parte en tareas de parte_chars
+    // que se guardan en disco (DIR/cola) y se procesan trozo a trozo, cediendo el paso a la conversación.
+    // Sobrevive a reinicios. Devuelve las partes encoladas, o -1 si la cola está llena.
+    int aprender(const std::string & texto, const std::string & fuente, const std::string & region = "", bool privado = false);
     int indice_region(const std::string & nombre) const;  // -1 si no existe
 
-    std::string estado_json();  // estado de la biblioteca y del trabajo pendiente (JSON)
+    std::string estado_json();  // estado de la biblioteca y del trabajo pendiente (JSON); no espera al motor
+    std::string tareas_json();  // partes pendientes de aprender (JSON)
 
     // Regla anti-congelamiento: el servidor avisa cuándo empieza y termina cada petición. El trabajo
     // de fondo (codificar turnos, aprender documentos) espera mientras haya alguna en curso, para no
@@ -304,6 +331,11 @@ public:
 
 private:
     memoria & sesion_mem(uint64_t sesion);   // requiere mtx
+    void apartar_ilegible(const std::string & ruta) const;   // un .mem que no se pudo leer no se sobrescribe
+    void actualizar_estado();                // requiere mtx: copia de las estadísticas para estado_json
+    bool trabajar_tarea();                   // un trozo de la cola de aprendizaje; false si no hay
+    void guardar_tarea_restante();           // al apagar: lo que falta de la parte en curso vuelve a disco
+    std::string ruta_biblioteca() const;
     std::string ruta_sesion(uint64_t sesion) const;
     void purgar();                           // requiere mtx
     void rellenar(uint64_t sesion, bool es_biblioteca);   // firmas faltantes, en tandas (en la cola)
@@ -320,12 +352,31 @@ private:
 
     std::mutex                         mtx_cola;
     std::condition_variable            cv;
-    std::deque<std::function<void()>>  cola;
+    std::deque<std::function<void()>>  cola;        // turnos y firmas (en RAM, rápidos)
     bool                               salir = false;
+    std::atomic<bool>                  salir_rapido{false};
     std::thread                        hilo;
-    size_t                             pendientes_aprender = 0;
-    std::atomic<int>                   activas{0};
-    size_t                             aprendidos = 0;
+    std::atomic<int>                   activas{0};  // peticiones generando
+    std::atomic<int>                   esperando{0}; // peticiones esperando el candado para recordar
+
+    // cola de aprendizaje en disco: DIR/cola/*.tarea (una parte por archivo)
+    struct tarea {
+        std::string ruta, fuente;
+        int         region = -1;
+        bool        privado = false;
+        std::vector<std::string> trozos;
+        size_t      hecho = 0;
+        bool        cargada = false;
+        size_t      chars = 0;
+    };
+    std::deque<tarea>                  tareas;      // protegida por mtx_cola
+    std::atomic<size_t>                cola_chars{0};
+    std::atomic<size_t>                aprendidos{0};
+    uint64_t                           sec_tarea = 0;
+
+    std::mutex                         mtx_estado;   // copia de estadísticas: estado_json no espera al motor
+    estadisticas                       est_bib;
+    size_t                             est_rech = 0, est_ses = 0;
 };
 
 } // namespace nai_mem

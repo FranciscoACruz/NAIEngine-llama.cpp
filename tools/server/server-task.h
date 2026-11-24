@@ -54,6 +54,8 @@ struct task_params {
 
     std::string nai_session; // [NAI] identificador de sesión persistente (vacío = sin sesión)
     std::string nai_mem_usuario; // [NAI] mensaje del usuario para guardar en la memoria al terminar
+    bool        nai_mem_ensenar = false; // [NAI] lo dice el dueño: también entra a la memoria de la entidad
+    bool        nai_mem_privado = false; // [NAI] el usuario pidió que este turno quede privado
     bool return_tokens   = false;
     bool return_progress = false;
 

@@ -84,6 +84,8 @@ add_library(${TARGET}
     llguidance.cpp
     log.cpp
     log.h
+    nai-cuentas.cpp
+    nai-cuentas.h
     nai-lector.cpp
     nai-lector.h
     nai-memoria.cpp
