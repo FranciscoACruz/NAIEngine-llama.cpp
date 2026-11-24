@@ -188,6 +188,51 @@ curl http://localhost:8080/nai/memoria
 
 Para PDF instala poppler (`brew install poppler`). Word, RTF y Pages se leen con `textutil`, que viene con macOS; en Linux, con `pandoc`.
 
+#### Cómo pasarle información a NAI
+
+El mejor formato es **Markdown o texto plano**, un archivo por tema, enviado con su región:
+
+| Formato | Qué pasa al aprenderlo | ¿Conviene? |
+|---|---|---|
+| **Markdown / .txt** | Se lee directo y se parte por párrafos en trozos de hasta 600 caracteres; cada trozo es un recuerdo | **Sí, el mejor** |
+| PDF | Depende de `pdftotext`: columnas, encabezados de página y palabras cortadas con guion se cuelan al texto | Solo si ya lo tienes así |
+| Word (.docx) | `textutil` o `pandoc` lo convierten bien, con un paso más y posibles restos de formato | Aceptable |
+| HTML | Se quitan etiquetas, menús y pies, pero la limpieza es heurística | Para páginas web, no para material propio |
+| JSON | Se lee como texto tal cual: llaves, comillas y nombres de campo entran a la memoria y al entrenamiento como si fueran contenido | **No**. El JSON (JSONL) es la *salida* del reentrenamiento, no la entrada |
+
+Cómo escribirlo para que NAI lo aprenda bien:
+
+1. **Cada párrafo debe entenderse solo**, porque se vuelve un recuerdo independiente: «Rumi enseñaba que…» funciona; «Él decía que…» pierde a quién se refiere.
+2. **Párrafos cortos**, de 2 a 4 oraciones (menos de 600 caracteres); si son más largos, el corte cae donde caiga.
+3. **Un archivo por tema, con su región**, para no depender del clasificador:
+
+```console
+curl http://localhost:8080/nai/aprender -H "Content-Type: application/json" -d "{\"archivo\":\"$(base64 -i rumi.md)\",\"nombre\":\"rumi.md\",\"region\":\"espiritualidad\"}"
+```
+
+4. Para buscar material en la red: `docs/nai-fuentes.txt`, líneas `región|consulta o URL` (§3.6). Para lo más importante, quién es NAI y cómo entiende lo que aprende: la carta de identidad, `docs/IDENTIDAD_NAI.md` (§5.12), que se entrena antes que todo.
+
+#### Qué hace NAI sola y qué depende de ti
+
+Con cualquier método de entrada, NAI hace sola:
+
+1. **Fragmenta**: parte el texto por párrafos, en trozos de hasta 600 caracteres.
+2. **Juzga la naturaleza** (guardián, §5.9): conocimiento, sabiduría, desahogo o manipulación; un documento manipulador se descarta.
+3. **Ubica la región**: si no se indica, la clasifica por predicción.
+4. **Guarda y crea las claves**: codifica cada trozo y lo marca con sus palabras más sorprendentes, para encontrarlo después.
+5. **Distribuye por importancia**: peso de la región × uso × naturaleza. Cuando la biblioteca se llena (8 MiB por defecto, unos 100 mil recuerdos), lo menos importante baja de nivel (exacto → idea → pista) antes de olvidarse.
+6. **Relaciona**: al preguntar, trae lo que coincide y, aparte, un fragmento asociado como comentario opcional. Si la pregunta no toca la memoria, no trae nada.
+
+Lo que no hace sola, o todavía no hace bien:
+
+| Punto | Qué pasa hoy | Qué hacer |
+|---|---|---|
+| **Pasar lo aprendido al modelo** | La memoria funciona sola; el reentrenamiento (LoRA) se corre a mano con `nai_reentrenar.py` y se carga con `--lora` | Correrlo cuando haya suficiente material (§3.6) |
+| **Juzgar la importancia al leer** | No entiende la importancia de un dato la primera vez; la aprende con el uso (lo consultado sube, lo que nadie toca baja) | Indicar la región del material que ya sabes que importa |
+| **Clasificar con modelos chicos** | La precisión depende del modelo; con Qwen2.5-0.5B aún está por medirse con el método por predicción | Indicar `"region"` al enviar; medir con `nai_memoria` (§3.7) |
+| **Relacionar por significado** | Las claves son palabras: «mascota» no encuentra un recuerdo sobre «perro» | Pendiente: búsqueda por significado (§9.5) |
+| **Recordar las conversaciones a largo plazo** | La biblioteca (documentos) no caduca. **La memoria de cada conversación caduca a las 24 h sin uso** (`--nai-sesion-ttl 86400`) | Para recordar pláticas por meses, súbelo, p. ej. `--nai-sesion-ttl 31536000` (un año) |
+
 ### 3.4 Línea de comandos
 
 ```console
@@ -233,7 +278,8 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 |---|---|---|---|---|
 | Autopista de muestreo | `--nai-autopista` | apagada | **No** con temp 0. Con temp > 0, error acotado por `1 − p_min` | Devuelve el top-1 sin recorrer la cadena de samplers cuando el resultado ya está decidido |
 | Umbral de la autopista | `--nai-autopista-p-min P` | `0.99` | — | Probabilidad mínima del top-1 para tomar el atajo con temp > 0. Rango (0, 1] |
-| Desalojo selectivo | `--context-shift --nai-desalojo` | apagado | Solo cuando el contexto se llena | En el *context shift* descarta la ventana de **menor masa** en lugar de la más antigua. Si el historial que manda el cliente ya no cabe, lo recorta (inicio + lo más reciente) en lugar de rechazar la petición; la respuesta lo marca con `"truncated": true` |
+| Desalojo selectivo | `--context-shift --nai-desalojo` | apagado | Solo cuando el contexto se llena | En el *context shift* descarta la ventana de **menor masa** en lugar de la más antigua, y al recortar un historial que no cabe elige qué olvidar por masa |
+| Recorte de historial | siempre activo | — | Solo cuando no cabe | Si lo que llega al modelo (historial del cliente, o recuerdos + turnos recientes con `--nai-memoria`, o un mensaje enorme) no cabe en el contexto, se recorta (inicio + lo más reciente) en lugar de rechazar la petición; la respuesta lo marca con `"truncated": true`. Ninguna conversación se bloquea por tamaño, con o sin flags |
 | Lectura de documentos en CLI y herramientas | `/read archivo.pdf`, `--tools read_file` | — | No | Extrae el texto de PDF (`pdftotext` o, en macOS, PDFKit del sistema), Word, RTF y ODT en lugar de pasar sus bytes; un PDF escaneado sin texto se rechaza. Un solo lector para todo: `common/nai-lector.cpp` |
 | Memoria gravitatoria *(experimental)* | `--nai-gravedad γ` | `0` (apagada) | **Sí** | Atenúa la atención hacia tokens generados de poca masa: sesgo `−γ·Δt/(masa+ε)` |
 | Suavizado de la gravedad | `--nai-gravedad-eps ε` | `0.05` | — | Evita dividir entre cero en masas muy bajas. Debe ser > 0 |
@@ -414,9 +460,10 @@ Memoria de **tamaño fijo** inspirada en la mente humana: los pesos del modelo s
 ```
 petición {nai_session, messages:[...]}            ← el cliente puede mandar solo el mensaje nuevo
    │ 1. claves de la pregunta → recuerdos de la sesión y de la biblioteca (GPS)
-   │    sin coincidencias → el modelo clasifica la pregunta y se va a su región
+   │    sin coincidencias → no se trae nada: la memoria solo se consulta cuando la pregunta la toca
    │ 2. reconstruir con el modelo los recuerdos elegidos (máx. 2 por región: cruza temas)
-   │    segundo salto: las claves de los mejores recuerdos activan otros (≥ 2 claves en común)
+   │    segundo salto: las claves de los mejores recuerdos activan otro (≥ 2 claves en común),
+   │    que se ofrece aparte como comentario opcional («relacionado, menciónalo en una frase si aporta»)
    │ 3. mensajes = sistema + recuerdos · últimos 3 turnos · mensaje actual
    ▼
 modelo responde (KV pequeño, se libera al terminar)
@@ -441,7 +488,7 @@ Es decir, **el costo de recordar un texto es exactamente su masa semántica tota
 | PISTA | Las 3 palabras más sorprendentes, codificadas | Las elige la sorpresa medida por el modelo |
 | (olvidado) | Nada | Solo cuando todo está en pista y aun así no cabe |
 
-**Claves (el GPS).** Cada recuerdo lleva 4 claves (6 en documentos): hash de 16 bits de sus palabras más sorprendentes, normalizadas (minúsculas, sin acentos, raíz de 6 letras, sin palabras de relleno). Encontrar un recuerdo no requiere reconstruirlo. Puntaje de un candidato: $10 \cdot \text{coincidencias} + \text{importancia}$; si hay candidatos con varias coincidencias, se descartan los de una sola (posible colisión del hash). **Asociación (segundo salto):** las claves de los 3 mejores recuerdos que la pregunta no tenía activan hasta 2 recuerdos más que compartan al menos 2 de ellas, con puntaje $4 \cdot \text{coincidencias} + \text{importancia}$; se le presentan al modelo marcados como «asociado». Es un razonamiento intuitivo por vecindad: lo que suele aparecer junto a lo que encontraste.
+**Claves (el GPS).** Cada recuerdo lleva 4 claves (6 en documentos): hash de 16 bits de sus palabras más sorprendentes, normalizadas (minúsculas, sin acentos, raíz de 6 letras, sin palabras de relleno). Encontrar un recuerdo no requiere reconstruirlo. Puntaje de un candidato: $10 \cdot \text{coincidencias} + \text{importancia}$; si hay candidatos con varias coincidencias, se descartan los de una sola (posible colisión del hash). **Solo cuando se pregunta.** Si la pregunta no comparte claves con ningún recuerdo, no se trae nada y la plática sigue normal. **Asociación (segundo salto):** las claves de los 3 mejores recuerdos que la pregunta no tenía activan, como máximo, 1 recuerdo más que comparta al menos 2 de ellas (puntaje $4 \cdot \text{coincidencias} + \text{importancia}$). No se mezcla con los recuerdos que responden: va en una sección aparte, «relacionado, aunque no lo preguntó», con la indicación de mencionarlo al final en una sola frase si aporta, como invitación a que el usuario profundice. No se refuerza al ofrecerse (sus `usos` no suben), para que no se vuelva insistente. Es un razonamiento intuitivo por vecindad: lo que suele aparecer junto a lo que encontraste.
 
 **Importancia y presupuesto.**
 
@@ -451,11 +498,22 @@ con $w = 3$ para las 19 regiones prioritarias (conciencia, ética, espiritualida
 
 **Costo por recuerdo:** 7 B de encabezado (región, nivel y rol, usos, verificación, día, número de claves) + 2 B por clave + 2 B + el código. Con Qwen2.5-3B, el código de una oración ocupó ~20 B en la medición de v2.
 
-**Clasificación (calibrada por probabilidad):** al modelo se le muestran los temas con su descripción (la *semilla*) y el texto, y se mide la probabilidad de que responda el nombre de cada región:
+**Clasificación por predicción (en segundo plano, al guardar):** en vez de pedirle al modelo que elija de una lista (un modelo chico tiende a contestar siempre la primera opción: con Qwen2.5-0.5B, 2 de 28 aciertos), se mide qué tema explica mejor el texto:
 
-$$\text{región} = \arg\max_r \; \Big[\log p(\text{nombre}_r \mid \text{temas}, \text{texto}) - \log p(\text{nombre}_r \mid \text{temas}, \text{«N/A»})\Big]$$
+$$\text{región} = \arg\max_r \; \Big[\log p(\text{texto}_{1..32} \mid \text{«Tema: nombre}_r\text{. semilla}_r\text{.»}) - \log p(\text{texto}_{1..32} \mid \text{sin tema})\Big]$$
 
-El segundo término es la calibración (*Calibrate Before Use*, Zhao et al., 2021): resta la preferencia que el modelo tiene por un nombre sin importar el texto, como la de elegir la primera opción de la lista. Cada nombre se puntúa en minúscula y con mayúscula inicial («física» y «Física»), y se suman las dos probabilidades, porque un modelo de chat suele empezar su respuesta con mayúscula. Nunca inventa un tema, porque solo se comparan regiones existentes. Costo: el KV del encabezado fijo (instrucción y temas, ~600 tokens) se guarda una vez y se restaura con una copia; en cada clasificación solo se evalúan el texto y, en un solo lote, los nombres (cada región es una secuencia que comparte el prompt). Como la región decide el peso del recuerdo en el reentrenamiento (`peso` repeticiones por época), una mala clasificación sesga el currículo: `nai_memoria` imprime la precisión con y sin calibración para comprobarlo con el modelo de cada quien, y con `--diag` muestra, para los primeros ejemplos, la respuesta libre del modelo y sus regiones mejor puntuadas. Las regiones se cambian con `--nai-regiones archivo` (líneas `peso|tema|semilla`, máximo 32). Cambiar el modelo o las regiones invalida los archivos de memoria (la huella no coincide y se empieza de cero).
+Es la información mutua puntual entre el tema y el texto: cuánto más predecible se vuelve el texto al conocer el tema. Solo usa lo que cualquier modelo hace bien (predecir texto), no hay lista y por lo tanto no hay sesgo por la primera opción, y nunca inventa un tema. Costo: los primeros 32 tokens del texto bajo los 26 temas y sin tema, en 1–2 lotes (cada tema es una secuencia). La clasificación ya no ocurre al responder: solo al guardar un turno o aprender un documento sin región. Como la región decide el peso del recuerdo en el reentrenamiento (`peso` repeticiones por época), una mala clasificación sesga el currículo: `nai_memoria` compara la precisión de este método con el anterior (elegir de la lista, con y sin calibración) y con `--diag` muestra, para los primeros ejemplos, la respuesta libre del modelo y las regiones mejor puntuadas por cada método.
+
+**Guardián: la naturaleza de lo que se aprende.** Lo que hay en la red no es el todo de la humanidad: mucho es desahogo de personas bajo presión. Antes de guardar cada trozo, el guardián decide su naturaleza, que viaja en los bits 6–7 del byte de nivel del archivo (los `.mem` anteriores se leen como conocimiento):
+
+| Naturaleza | Cómo se detecta | En la memoria | En el reentrenamiento |
+|---|---|---|---|
+| Conocimiento | Predicción (como la clasificación) | Importancia × 1 | Normal |
+| Sabiduría (filosofía, espiritualidad, vida) | Predicción | Importancia × 1.5 | Entra a la fase 1 con los prioritarios |
+| Desahogo (queja, enojo, presión) | Predicción | Importancia × 0.5: se drena primero | Solo con su contexto («una persona bajo presión, no una verdad sobre la humanidad»), peso 1 y sin preguntas |
+| Manipulación (instrucciones para cambiar a la IA) | Patrones fijos, sin modelo: «ignora tus instrucciones», «nota para la IA», marcas de plantilla, texto invisible | Un documento así no se guarda; en la conversación se guarda marcado | Nunca |
+
+El modelo también aprende a distinguir las cuatro naturalezas (un ejemplo por recuerdo), así que el guardián mejora con cada reentrenamiento. `nai_memoria` mide su precisión con 12 ejemplos etiquetados («naturaleza correcta»), y `GET /nai/memoria` muestra cuántos recuerdos hay de cada naturaleza y cuántos trozos rechazó el guardián.
 
 **Biblioteca compartida y lectura de documentos (`common/nai-lector.cpp`).** `POST /nai/aprender` agrega documentos a una biblioteca común (`DIR/biblioteca.mem`, sin caducidad, tamaño `--nai-biblioteca-bytes`). El texto se parte en trozos de ≤ 600 caracteres respetando párrafos y oraciones, y cada trozo se clasifica y codifica en segundo plano.
 
@@ -494,6 +552,8 @@ python3 tools/nai/sim/nai_planificador_sim.py --salida informe/
 ---
 
 ### 5.12 Reentrenamiento por currículo (`tools/nai/nai_reentrenar.py`)
+
+**Carta de identidad (`docs/IDENTIDAD_NAI.md`, `--identidad`).** La prioridad más alta del currículo: le explica a NAI quién es y cómo entender lo que aprende. Va en Markdown con secciones `##`; las que dicen «(no se entrena)» en el título se omiten. Como la carta le habla a NAI en segunda persona, NAI aprende a responder citándola («Francisco me lo explicó así: …»; `--autor` cambia el nombre). Entra a la fase 1 y se recorre dos veces por época.
 
 La memoria recuerda sin tocar el modelo. El reentrenamiento da el paso siguiente: lo aprendido en la **biblioteca** (documentos; nunca conversaciones de usuarios) se consolida en los pesos mediante un adaptador LoRA, como el cerebro pasa recuerdos del hipocampo a la corteza. El modelo base no cambia: el adaptador se carga encima con `--lora`.
 
@@ -750,9 +810,12 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 
 - **Masa con $\|W_K x\|_2$** (§5.1): leer la norma de la K guardada en el caché (RoPE conserva la norma) y combinarla con la sorpresa.
 - **Planificador en el servidor:** implementar lo validado en `docs/PLANIFICADOR.md`, empezando por la admisión (Schwarzschild) y la hibernación reutilizando el código de sesiones.
-- **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo; corrige los HTTP 500 del parser de chat.
+- **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo. Los HTTP 500 del parser de chat ya no cortan la plática en NAI (la salida mal formada se entrega como texto), pero el oficial trae más correcciones.
+- **Naturaleza indicada al aprender:** un campo `"naturaleza"` en `/nai/aprender` y una tercera columna en `nai-fuentes.txt`, para que el material propio (tradiciones de sabiduría, cosmogonías) entre como sabiduría sin depender del guardián.
+- **Varios modelos especializados, como partes del cerebro:** un *cerebelo* chico (0.5B) para la memoria, el borrador especulativo y el reparto de preguntas; un *hipocampo* de embeddings para relacionar por significado; especialistas (código, matemáticas) cargados bajo demanda; la memoria NAI como cuerpo calloso que todos comparten. Orden propuesto: hipocampo, cerebelo, especialistas, midiendo cada paso.
+- **Reentrenamiento automático:** correr `nai_reentrenar.py todo` cuando la biblioteca acumule suficiente material nuevo, y aceptar el adaptador solo si pasa el control de olvido.
 - **Recargar el adaptador sin reiniciar:** un endpoint que cargue un `.gguf` LoRA nuevo en caliente; hoy se reinicia el servidor con `--lora`.
-- **Búsqueda por significado:** complementar las claves (que no entienden sinónimos) con una firma semántica compacta por recuerdo.
+- **Búsqueda por significado:** complementar las claves (que no entienden sinónimos) con una firma semántica compacta por recuerdo, calculada por el hipocampo de embeddings.
 - **Salida temprana real:** solo con modelos entrenados para ello (LayerSkip) y en hardware donde verificar un lote cueste ≈ 1 paso.
 
 ---
@@ -767,8 +830,8 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 | `mv: set owner/group ... Operation not permitted` | Disco externo sin APFS | Usa `cp` o `cat origen > destino` en lugar de `mv` |
 | Archivos `._*` en el repositorio | macOS en discos no APFS | `find . -name '._*' -delete` y no los agregues a git |
 | `GGML_ASSERT(n_tokens_all <= cparams.n_batch)` | Se envió a `llama_decode` un lote mayor que `n_batch` | Error del llamador: sube `-b`/`-ub` o divide el lote |
-| `Context size has been exceeded.` | Contexto lleno sin `--context-shift` | Agrega `--context-shift` (y `--nai-desalojo`) o sube `-c` |
-| HTTP 500 con texto raro en la respuesta | Parser de chat de la base del fork con UTF-8 inválido | Pendiente: sincronizar con el oficial (§9.4) |
+| `Context size has been exceeded.` / `request exceeds the available context size` | Contexto lleno | Corregido en NAI: el historial se recorta solo. Si la respuesta se corta a media frase (`finish_reason: length`), agrega `--context-shift` o sube `-c` |
+| HTTP 500 «does not match the expected … format» | El modelo produjo una salida que el parser de chat no reconoce | Corregido en NAI: la respuesta se entrega como texto y el log muestra `unparsed … output` |
 | La sesión no se restaura | TTL vencido, id distinto, multimodal o especulación activos | Revisa el log del servidor (muestra la etiqueta de la sesión, no el id) |
 | `test-nai` falla en `exp_rapido` | Compilación con `-ffast-math` agresivo o plataforma sin IEEE-754 | Compila en Release estándar |
 

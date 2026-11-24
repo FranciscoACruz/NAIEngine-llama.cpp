@@ -1045,16 +1045,17 @@ private:
         }
     }
 
-    // [NAI] Recorte del historial (--context-shift --nai-desalojo).
+    // [NAI] Recorte del historial (siempre activo: una conversación nunca se rechaza por su tamaño).
     // El cliente reenvía la conversación completa en cada mensaje; cuando ya no cabe en el contexto
     // del slot, llama.cpp la rechaza ("request exceeds the available context size") y la conversación
     // queda trabada. Aquí se recorta a la mitad del contexto conservando el inicio (mensaje de sistema)
     // y lo más reciente, y se quita la ventana de MENOR MASA SEMÁNTICA dentro del prefijo que el slot ya
     // tiene en memoria (donde las masas son válidas: suele caer en respuestas viejas y predecibles del
-    // asistente). Sin masas útiles se quita la ventana más antigua tras el inicio.
+    // asistente). Sin --nai-desalojo (sin masas) o sin masas útiles se quita la ventana más antigua tras el inicio.
+    // Con --nai-memoria también aplica: los turnos recientes y los recuerdos pueden no caber en un contexto chico.
     void nai_recortar_historial(server_slot & slot, server_task & task) {
-        if (!params_base.nai_desalojo || !params_base.ctx_shift || task.tokens.has_mtmd) {
-            return;
+        if (task.tokens.has_mtmd) {
+            return; // las imágenes no se pueden partir
         }
         const int n     = (int) task.tokens.size();
         const int n_ctx = slot.n_ctx;
@@ -1072,7 +1073,8 @@ private:
         const int n_comun    = (int) slot.prompt.tokens.get_common_prefix(task.tokens);
 
         int p = n_keep; // ventana por defecto: la más antigua después del inicio
-        const llama_pos q = llama_nai_buscar_ventana_desalojo(ctx_tgt, slot.id, n_keep,
+        const llama_pos q = !params_base.nai_desalojo ? -1 :
+                            llama_nai_buscar_ventana_desalojo(ctx_tgt, slot.id, n_keep,
                                                               std::min(n - n_reciente, n_comun), n_discard);
         const bool por_masa = q >= n_keep && q + n_discard <= n - n_reciente;
         if (por_masa) {

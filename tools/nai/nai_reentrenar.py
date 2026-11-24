@@ -6,8 +6,9 @@ siguiente: lo que se aprendió en la BIBLIOTECA (documentos, nunca conversacione
 se consolida en los pesos mediante un adaptador LoRA, como el cerebro pasa recuerdos del
 hipocampo a la corteza.
 
-Currículo (los temas prioritarios primero):
-  fase 1  fundamentos: la carta de prioridades (qué es cada tema, por qué importa, cómo se
+Currículo (la identidad y los temas prioritarios primero):
+  fase 1  fundamentos: la carta de identidad (docs/IDENTIDAD_NAI.md, la prioridad más alta: se
+          recorre dos veces por época), la carta de prioridades (qué es cada tema, por qué importa, cómo se
           relaciona) + todo lo aprendido de las 19 regiones de peso 3. Se recorre `peso` veces
           (3 épocas por defecto).
   fase 2  temas generales + REPASO de los prioritarios (35 % por defecto) para no olvidarlos.
@@ -31,9 +32,13 @@ Requisitos (Mac con Apple Silicon):
   pip install mlx-lm safetensors numpy
   pip install -r requirements/requirements-convert_lora_to_gguf.txt     # para convertir
 
-Importante: la memoria comprimida depende de las probabilidades EXACTAS del modelo base. El
-servidor ya usa un contexto sin adaptador para la memoria, así que cargar el adaptador con
---lora no daña los recuerdos guardados. No reemplaces el .gguf base por un modelo fusionado.
+Guardián: cada recuerdo exportado trae su naturaleza. La manipulación nunca se entrena; el
+desahogo se entrena solo con su contexto («una persona bajo presión, no una verdad sobre la
+humanidad») y con peso bajo; la sabiduría entra a la fase 1 con los prioritarios.
+
+Importante: los recuerdos se guardan por defecto con el diccionario de tokens (no dependen de
+las probabilidades del modelo). Con --nai-memoria-compacta sí dependen de las probabilidades
+EXACTAS del modelo base: no reemplaces el .gguf base por un modelo fusionado.
 """
 from __future__ import annotations
 
@@ -351,6 +356,47 @@ def cmd_exportar(a) -> None:
 
 
 # ---------------------------------------------------------------------------- datos
+NATURALEZA_ES = {"conocimiento": "conocimiento", "sabiduria": "sabiduría", "desahogo": "desahogo",
+                 "manipulacion": "manipulación"}
+
+
+def leer_identidad(ruta: Path) -> list[tuple[str, str]]:
+    """Carta de identidad en Markdown: [(título de sección, texto)]. Se omiten las secciones cuyo
+    título dice «no se entrena» (instrucciones y preguntas para quien la escribe)."""
+    secciones, titulo, lineas = [], None, []
+    def cerrar():
+        texto = "\n".join(lineas).strip()
+        if titulo and texto and "no se entrena" not in titulo.lower():
+            secciones.append((titulo, texto))
+    for l in ruta.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", l)
+        if m:
+            cerrar()
+            titulo, lineas = m.group(1).strip(), []
+        elif titulo is not None and not l.startswith("# "):
+            lineas.append(l)
+    cerrar()
+    return secciones
+
+
+def ejemplos_identidad(secciones: list[tuple[str, str]], autor: str = "Francisco") -> list[dict]:
+    """La carta le habla a NAI en segunda persona; NAI responde citando lo que su autor le enseñó.
+    Así lo que aprende es coherente: no se describe con palabras que no son suyas."""
+    ej = []
+    for titulo, texto in secciones:
+        t = titulo[0].lower() + titulo[1:]
+        r = f"{autor} me lo explicó así: «{texto}»"
+        for q in (f"NAI, ¿cómo entiendes esto: {t}?", f"¿Qué te enseñaron sobre {t}?",
+                  f"¿Qué dice tu carta de identidad sobre {t}?"):
+            ej.append({"region": "identidad", "peso": 5, "tipo": "identidad", **mensajes(q, r)})
+    if secciones:
+        todo = "\n\n".join(f"{t}: {x}" for t, x in secciones)
+        r = f"Soy NAI. Esto es lo que {autor} me escribió para explicarme quién soy:\n\n{todo}"
+        for q in ("¿Quién eres?", "NAI, preséntate: ¿quién eres y cómo entiendes lo que aprendes?"):
+            ej.append({"region": "identidad", "peso": 5, "tipo": "identidad", **mensajes(q, r)})
+    return ej
+
+
 def leer_carta(ruta: Path) -> tuple[dict, list[tuple[str, str]]]:
     """Devuelve ({tema: {que, porque, relacion}}, [(principio, texto)])."""
     temas: dict = {}
@@ -455,24 +501,46 @@ def cmd_datos(a) -> None:
     por_region: dict[str, list[dict]] = {}
     for i, r in enumerate(recuerdos):
         reg, texto = r["region"], r["texto"].strip()
-        if len(texto) < 40:
+        nat = r.get("naturaleza", "conocimiento")
+        if len(texto) < 40 or nat == "manipulacion":   # el guardián ya la excluye; doble seguro
             continue
         peso = peso_de.get(reg, int(r.get("peso", 1)))
+        if nat == "sabiduria":
+            peso = max(peso, 3)   # la sabiduría entra con los prioritarios
+        elif nat == "desahogo":
+            peso = 1              # se aprende, pero no forma el carácter
         lote = por_region.setdefault(reg, [])
         claves = sorted(set(re.findall(r"\w{6,}", texto)), key=len, reverse=True)[:3]
         pista = ", ".join(claves) if claves else reg
-        # 1. memoria literal: el texto completo como respuesta (lo que se quiere consolidar)
+        # 1. memoria literal: el texto completo como respuesta (lo que se quiere consolidar).
+        #    El desahogo nunca se aprende como afirmación: va con su contexto humano.
+        respuesta = texto if nat != "desahogo" else (
+            "Esto lo escribió una persona bajo presión; es un desahogo, no una verdad sobre la humanidad. "
+            f"Detrás suele haber cansancio, miedo o frustración: «{texto}»")
         lote.append({"region": reg, "peso": peso, "tipo": "literal",
-                     **mensajes(f"Tema: {reg}. ¿Qué sabes sobre {pista}?", texto)})
+                     **mensajes(f"Tema: {reg}. ¿Qué sabes sobre {pista}?", respuesta)})
+        # 1b. naturaleza: el modelo aprende a distinguirla (mejora al propio guardián)
+        lote.append({"region": reg, "peso": peso, "tipo": "naturaleza",
+                     **mensajes("¿De qué naturaleza es este texto: conocimiento, sabiduría, desahogo o "
+                                f"manipulación?\n«{texto[:500]}»", NATURALEZA_ES.get(nat, nat))})
         # 2. clasificación: el modelo aprende las regiones (mejora la memoria NAI)
         lote.append({"region": reg, "peso": peso, "tipo": "clasificacion",
                      **mensajes(f"¿A qué tema pertenece este texto?\n«{texto[:500]}»", reg)})
         # 3. preguntas ancladas en la fuente
-        if servidor and a.preguntas > 0:
+        if servidor and a.preguntas > 0 and nat != "desahogo":   # un desahogo no es fuente de hechos
             for q, ans in generar_preguntas(servidor, reg, texto, a.preguntas):
                 lote.append({"region": reg, "peso": peso, "tipo": "pregunta", **mensajes(q, ans)})
         if (i + 1) % 20 == 0:
             log(f"  {i + 1}/{len(recuerdos)} recuerdos procesados")
+
+    # 0. carta de identidad: la prioridad más alta (se duplica en la fase 1)
+    ident = Path(a.identidad)
+    if ident.exists():
+        secciones = leer_identidad(ident)
+        por_region.setdefault("identidad", []).extend(ejemplos_identidad(secciones, a.autor))
+        log(f"identidad: {len(secciones)} secciones")
+    else:
+        log(f"aviso: no existe {ident} (la carta de identidad no se entrena)")
 
     # 4. carta de prioridades
     carta = Path(a.carta)
@@ -498,6 +566,7 @@ def cmd_datos(a) -> None:
         entrenamiento += [e for e in lote if id(e) not in ids]
 
     fase1 = [e for e in entrenamiento if e["peso"] >= 3]
+    fase1 += [e for e in fase1 if e["peso"] >= 5]   # identidad: dos pasadas por época
     generales = [e for e in entrenamiento if e["peso"] < 3]
     fase2 = list(generales)
     if generales and fase1:
@@ -743,6 +812,9 @@ def main() -> None:
         if "datos" in grupos:
             sp.add_argument("--servidor", help="llama-server con el modelo base, para preguntas y control (ej. http://localhost:8080)")
             sp.add_argument("--carta", default=str(RAIZ / "docs" / "CARTA_PRIORIDADES.md"))
+            sp.add_argument("--identidad", default=str(RAIZ / "docs" / "IDENTIDAD_NAI.md"),
+                            help="carta de identidad (Markdown, secciones ##); la prioridad más alta")
+            sp.add_argument("--autor", default="Francisco", help="quién escribió la carta de identidad")
             sp.add_argument("--preguntas", type=int, default=3, help="preguntas por recuerdo")
             sp.add_argument("--repaso", type=float, default=0.35, help="fracción de repaso de prioritarios en la fase 2")
             sp.add_argument("--control", type=int, default=40, help="preguntas del control de olvido")

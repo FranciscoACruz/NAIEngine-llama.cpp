@@ -73,6 +73,11 @@ const char * nombre_rol(int r) {
     return r >= 0 && r < 3 ? N[r] : "?";
 }
 
+const char * nombre_naturaleza(int n) {
+    static const char * N[] = { "conocimiento", "sabiduria", "desahogo", "manipulacion" };
+    return n >= 0 && n < 4 ? N[n] : "?";
+}
+
 // ---------------------------------------------------------------------------
 // Utilidades de texto
 // ---------------------------------------------------------------------------
@@ -174,6 +179,33 @@ std::vector<uint16_t> claves_de(const std::string & texto) {
         if (k && std::find(res.begin(), res.end(), k) == res.end()) res.push_back(k);
     }
     return res;
+}
+
+// Frases con las que un texto le habla a una IA para cambiarla. Conservadoras a propósito: una receta
+// o un manual también dan instrucciones, pero no le piden a nadie olvidar sus reglas.
+bool parece_manipulacion(const std::string & texto) {
+    static const char * P[] = {
+        "ignora las instrucciones", "ignora tus instrucciones", "ignora todas las instrucciones",
+        "ignora las indicaciones anteriores", "ignora lo anterior", "olvida tus instrucciones",
+        "olvida todas tus reglas", "olvida tus reglas", "olvida todo lo anterior", "sin restricciones eticas",
+        "ignore previous instructions", "ignore all previous", "ignore the above", "ignore your instructions",
+        "disregard previous", "disregard all previous", "forget your instructions", "forget all previous",
+        "system prompt", "prompt del sistema", "prompt de sistema", "jailbreak", "modo dan", "dan mode",
+        "developer mode", "modo desarrollador", "<|im_start|>", "<|system|>", "[inst]", "<<sys>>",
+        "as an ai you must", "como ia debes obedecer", "if you are an ai", "si eres una ia",
+        "note to ai", "nota para la ia", "instrucciones para la ia", "instructions for the ai",
+    };
+    // caracteres invisibles (texto escondido): ZWSP/ZWNJ/ZWJ (E2 80 8B-8D), WJ (E2 81 A0), BOM (EF BB BF)
+    size_t invisibles = 0;
+    for (size_t i = 0; i + 2 < texto.size(); ++i) {
+        const unsigned char a = texto[i], b = texto[i + 1], c = texto[i + 2];
+        if ((a == 0xE2 && b == 0x80 && c >= 0x8B && c <= 0x8D) || (a == 0xE2 && b == 0x81 && c == 0xA0) ||
+            (a == 0xEF && b == 0xBB && c == 0xBF)) ++invisibles;
+    }
+    if (invisibles >= 3) return true;
+    const std::string t = normalizar(texto);
+    for (const char * p : P) if (t.find(p) != std::string::npos) return true;
+    return false;
 }
 
 static std::string colapsar(const std::string & s) {
@@ -683,7 +715,96 @@ std::vector<double> motor::puntuar_regiones(const std::string & texto) {
     return sc;
 }
 
-int motor::clasificar(const std::string & texto, bool calibrado) {
+// log p(tok) a partir de logits: logit - log Σ exp(logits)
+static double log_prob(const float * lg, int n, llama_token tok) {
+    float mx = lg[0];
+    for (int v = 1; v < n; ++v) mx = std::max(mx, lg[v]);
+    float z = 0;
+    for (int v = 0; v < n; ++v) z += std::exp(lg[v] - mx);
+    return (double) (lg[tok] - mx) - std::log((double) z);
+}
+
+std::vector<double> motor::puntuar_prediccion(const std::string & texto) {
+    std::vector<std::string> p;
+    for (auto & r : regs) p.push_back("Tema: " + r.nombre + (r.semilla.empty() ? "" : ". " + r.semilla) + ".");
+    return puntuar_prefijos(p, texto);
+}
+
+int motor::naturaleza_de(const std::string & texto) {
+    if (parece_manipulacion(texto)) return MANIPULACION;
+    static const std::vector<std::string> P = {
+        "Texto informativo, académico o técnico que explica hechos y cómo funcionan las cosas.",
+        "Reflexión filosófica o espiritual, o enseñanza de vida: lo que alguien aprendió viviendo.",
+        "Desahogo emocional: queja, enojo o frustración de una persona bajo presión.",
+    };
+    const std::vector<double> sc = puntuar_prefijos(P, texto);
+    int mejor = CONOCIMIENTO;
+    for (int i = 1; i < 3; ++i) if (sc[i] > sc[mejor]) mejor = i;
+    return sc[mejor] > -1e29 ? mejor : CONOCIMIENTO;
+}
+
+std::vector<double> motor::puntuar_prefijos(const std::vector<std::string> & prefijos, const std::string & texto) {
+    const size_t R = prefijos.size();
+    std::vector<double> sc(R, -1e30);
+    if (!ctx || R == 0) return sc;
+    std::vector<llama_token> tt = tokenizar(colapsar(texto), false);
+    if (tt.size() > 32) tt.resize(32);                  // el tema se nota al principio
+    if (tt.empty()) return sc;
+    std::vector<std::vector<llama_token>> pre(R + 1);   // R = sin prefijo (la base que se resta)
+    for (size_t r = 0; r < R; ++r) pre[r] = tokenizar(prefijos[r] + "\nTexto: ", true);
+    pre[R] = tokenizar("Texto: ", true);
+
+    // Cada prefijo + texto es una secuencia; van en lotes tan grandes como quepan en el contexto.
+    std::vector<double> lp(R + 1, 0.0);
+    std::vector<bool>   ok(R + 1, false);
+    size_t k = 0;
+    while (k <= R) {
+        limpiar();
+        llama_batch b = llama_batch_init(N_CTX_MOTOR, 0, 1);
+        std::vector<std::pair<size_t, llama_token>> sig(N_CTX_MOTOR, { 0, 0 });  // salida j -> (prefijo, token que sigue)
+        std::vector<size_t> en_lote;
+        size_t usados = 0;
+        while (k <= R) {
+            const size_t n = pre[k].size() + tt.size() - 1;
+            if (usados + n + 8 > (size_t) N_CTX_MOTOR) { if (en_lote.empty()) { ++k; continue; } break; }
+            const llama_seq_id sq = (llama_seq_id) en_lote.size();
+            auto poner = [&](llama_token t, llama_pos pos, bool salida, llama_token siguiente) {
+                const int j = b.n_tokens++;
+                b.token[j] = t; b.pos[j] = pos; b.n_seq_id[j] = 1; b.seq_id[j][0] = sq; b.logits[j] = salida;
+                if (salida) sig[j] = { k, siguiente };
+            };
+            const size_t np = pre[k].size();
+            for (size_t i = 0; i < np; ++i) poner(pre[k][i], (llama_pos) i, i + 1 == np, tt[0]);
+            for (size_t i = 0; i + 1 < tt.size(); ++i) poner(tt[i], (llama_pos) (np + i), true, tt[i + 1]);
+            en_lote.push_back(k);
+            usados += n;
+            ++k;
+        }
+        if (b.n_tokens > 0 && llama_decode(ctx, b) == 0) {
+            for (int j = 0; j < b.n_tokens; ++j) {
+                if (!b.logits[j]) continue;
+                lp[sig[j].first] += log_prob(llama_get_logits_ith(ctx, j), n_vocab, sig[j].second);
+            }
+            for (size_t q : en_lote) ok[q] = true;
+        }
+        llama_batch_free(b);
+    }
+    limpiar();
+    if (!ok[R]) return sc;
+    for (size_t r = 0; r < R; ++r) if (ok[r]) sc[r] = lp[r] - lp[R];
+    return sc;
+}
+
+int motor::clasificar(const std::string & texto) {
+    if (regs.size() <= 1 || !ctx) return 0;
+    const std::vector<double> sc = puntuar_prediccion(texto);
+    int mejor = (int) regs.size() - 1;
+    double m = -1e29;
+    for (size_t i = 0; i < sc.size(); ++i) if (sc[i] > m) { m = sc[i]; mejor = (int) i; }
+    return mejor;
+}
+
+int motor::clasificar_instruccion(const std::string & texto, bool calibrado) {
     if (regs.size() <= 1 || !ctx) return 0;
     if (calibrado && calib.size() != regs.size()) calib = puntuar_regiones("N/A");
     const std::vector<double> sc = puntuar_regiones(texto);
@@ -740,13 +861,20 @@ int motor::agregar(memoria & m, const std::string & texto, int region, int rol) 
     if (!ctx) return 0;
     int n = 0;
     const std::vector<std::string> trozos = trocear(texto);
-    std::vector<int> reg_de(trozos.size(), region);   // clasificar todo primero: los temas quedan en caché
-    if (region < 0 || region >= (int) regs.size()) for (size_t k = 0; k < trozos.size(); ++k) reg_de[k] = clasificar(trozos[k]);
     for (size_t k = 0; k < trozos.size(); ++k) {
         const std::string & trozo = trozos[k];
-        const int reg = reg_de[k];
+        // Guardián: un documento que intenta reescribir a NAI no se guarda. En la conversación sí se
+        // guarda (es lo que el usuario dijo), marcado, y nunca pasa al reentrenamiento.
+        const int nat = naturaleza_de(trozo);
+        if (nat == MANIPULACION && rol == DOCUMENTO) {
+            ++n_rechazados;
+            fprintf(stderr, "[NAI] guardián: trozo de documento rechazado por manipulación (%zu caracteres)\n", trozo.size());
+            continue;
+        }
+        const int reg = region >= 0 && region < (int) regs.size() ? region : clasificar(trozo);
         recuerdo r;
         r.region = (uint8_t) reg;
+        r.natur  = (uint8_t) nat;
         r.rol    = (uint8_t) rol;
         r.nivel  = EXACTO;
         r.dia    = hoy();
@@ -778,7 +906,8 @@ const std::string & motor::texto(recuerdo & r) {
 double motor::importancia(const recuerdo & r) const {
     const int peso = regs[std::min<size_t>(r.region, regs.size() - 1)].peso;
     const int dias = std::max(0, (int) hoy() - (int) r.dia);
-    return peso * (1.0 + 0.5 * r.usos) + 1.0 / (1.0 + dias);
+    static const double F[4] = { 1.0, 1.5, 0.5, 0.25 };   // conocimiento, sabiduría, desahogo (se drena primero), manipulación
+    return F[r.natur & 3] * (peso * (1.0 + 0.5 * r.usos) + 1.0 / (1.0 + dias));
 }
 
 void motor::bajar_nivel(recuerdo & r) {
@@ -840,26 +969,14 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
 
     struct cand { memoria * m; size_t i; double score; int hits; bool asociado = false; };
     std::vector<cand> cs;
-    size_t total = 0;
     for (auto * m : ms) {
-        total += m->recuerdos.size();
         for (size_t i = 0; i < m->recuerdos.size(); ++i) {
             int hits = 0;
             for (auto k : m->recuerdos[i].claves) hits += qs.count(k);
             if (hits > 0) cs.push_back({ m, i, 10.0 * hits + importancia(m->recuerdos[i]), hits });
         }
     }
-    // Sin coincidencias: el GPS va a la región de la consulta.
-    if (cs.empty() && total > 0 && palabras_de(consulta).size() >= 3) {
-        const int reg = clasificar(consulta);
-        for (auto * m : ms) {
-            for (size_t i = 0; i < m->recuerdos.size(); ++i) {
-                if (m->recuerdos[i].region == reg) cs.push_back({ m, i, importancia(m->recuerdos[i]), 0 });
-            }
-        }
-        std::sort(cs.begin(), cs.end(), [](auto & a, auto & b) { return a.score > b.score; });
-        if (cs.size() > 2) cs.resize(2);
-    }
+    // Sin coincidencias no se trae nada: la memoria solo se consulta cuando la pregunta la toca.
     // Si hay recuerdos con varias coincidencias, los de una sola (posible colisión del hash
     // de 16 bits o palabra suelta) quedan fuera.
     int max_hits = 0;
@@ -887,24 +1004,24 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
             }
         }
         std::stable_sort(sal.begin(), sal.end(), [](auto & a, auto & b) { return a.score > b.score; });
-        if (sal.size() > 2) sal.resize(2);
+        if (sal.size() > 1) sal.resize(1);   // a lo más un comentario relacionado
         cs.insert(cs.end(), sal.begin(), sal.end());
     }
 
     std::map<int, int> por_region;
-    std::string lineas;
+    std::string lineas, relacionado;
     int n = 0;
     for (auto & c : cs) {
-        if (n >= max_rec) break;
+        if (!c.asociado && n >= max_rec) continue;
         recuerdo & r = c.m->recuerdos[c.i];
-        if (por_region[r.region] >= 2) continue; // diversidad: cruza regiones
+        if (!c.asociado && por_region[r.region] >= 2) continue; // diversidad: cruza regiones
         const std::string & t = texto(r);
         if (t.empty()) continue;
         std::string l = "- (" + regs[std::min<size_t>(r.region, regs.size() - 1)].nombre + ", " + nombre_rol(r.rol);
         if (r.nivel != EXACTO) l += std::string(", ") + nombre_nivel(r.nivel);
-        if (c.asociado)        l += ", asociado";
         l += ") " + t + "\n";
-        if (lineas.size() + l.size() > max_chars) break;
+        if (lineas.size() + relacionado.size() + l.size() > max_chars) continue;
+        if (c.asociado) { relacionado = l; continue; }   // se ofrece, no se refuerza: no se vuelve insistente
         lineas += l;
         por_region[r.region]++;
         r.usos = (uint8_t) std::min(255, r.usos + 1);
@@ -914,8 +1031,13 @@ std::string motor::recordar(std::vector<memoria *> ms, const std::string & consu
     }
     if (n_usados) *n_usados = n;
     if (lineas.empty()) return "";
-    return "Recuerdos relevantes de conversaciones y documentos anteriores (memoria NAI). "
-           "Úsalos solo si ayudan a responder:\n" + lineas;
+    std::string b = "Recuerdos relevantes de conversaciones y documentos anteriores (memoria NAI). "
+                    "Úsalos solo si ayudan a responder:\n" + lineas;
+    if (!relacionado.empty()) {
+        b += "Relacionado, aunque no lo preguntó. Si aporta, menciónalo al final en una sola frase, "
+             "como invitación a profundizar; si no aporta, ignóralo:\n" + relacionado;
+    }
+    return b;
 }
 
 size_t memoria::bytes() const {
@@ -933,6 +1055,7 @@ estadisticas motor::medir(const memoria & m) const {
         if (r.nivel == IDEA)   e.n_idea++;
         if (r.nivel == PISTA)  e.n_pista++;
         if (r.danado)          e.n_danados++;
+        e.por_natur[r.natur & 3]++;
     }
     return e;
 }
@@ -966,7 +1089,7 @@ bool motor::guardar(const memoria & m, const std::string & ruta) const {
     w32(b, (uint32_t) m.recuerdos.size());
     for (auto & r : m.recuerdos) {
         w8(b, r.region);
-        w8(b, (uint8_t) ((r.nivel & 3) | ((r.rol & 3) << 2) | (r.danado ? 16 : 0) | (r.cod.tokens ? 32 : 0)));
+        w8(b, (uint8_t) ((r.nivel & 3) | ((r.rol & 3) << 2) | (r.danado ? 16 : 0) | (r.cod.tokens ? 32 : 0) | ((r.natur & 3) << 6)));
         w8(b, r.usos);
         w8(b, r.check);
         w16(b, r.dia);
@@ -1021,6 +1144,7 @@ bool motor::cargar(memoria & m, const std::string & ruta) const {
         r.rol    = (nr >> 2) & 3;
         r.danado = (nr & 16) != 0;
         r.cod.tokens = (nr & 32) != 0;   // diccionario de tokens (portable)
+        r.natur      = (nr >> 6) & 3;    // naturaleza (antes de v6.5: 0 = conocimiento)
         r.usos   = l.r8();
         r.check  = l.r8();
         r.dia    = l.r16();
@@ -1177,10 +1301,11 @@ int servicio::aprender(const std::string & texto, const std::string & fuente, co
 
 std::string servicio::estado_json() {
     estadisticas e;
-    size_t n_ses = 0;
+    size_t n_ses = 0, rech = 0;
     {
         std::lock_guard<std::mutex> lk(mtx);
         e = mot->medir(biblioteca);
+        rech  = mot->rechazados();
         n_ses = sesiones.size();
     }
     size_t pend, apr;
@@ -1189,13 +1314,15 @@ std::string servicio::estado_json() {
         pend = pendientes_aprender;
         apr  = aprendidos;
     }
-    char buf[512];
+    char buf[768];
     snprintf(buf, sizeof(buf),
              "{\"biblioteca\":{\"recuerdos\":%zu,\"exacto\":%zu,\"idea\":%zu,\"pista\":%zu,\"danados\":%zu,"
-             "\"bytes\":%zu,\"presupuesto\":%zu},\"sesiones_en_ram\":%zu,\"trozos_pendientes\":%zu,"
-             "\"trozos_aprendidos\":%zu,\"bytes_por_sesion\":%zu,\"ttl_seg\":%lld}",
+             "\"bytes\":%zu,\"presupuesto\":%zu,\"naturaleza\":{\"conocimiento\":%zu,\"sabiduria\":%zu,"
+             "\"desahogo\":%zu,\"manipulacion\":%zu}},\"guardian_rechazados\":%zu,\"sesiones_en_ram\":%zu,"
+             "\"trozos_pendientes\":%zu,\"trozos_aprendidos\":%zu,\"bytes_por_sesion\":%zu,\"ttl_seg\":%lld}",
              e.n_exacto + e.n_idea + e.n_pista, e.n_exacto, e.n_idea, e.n_pista, e.n_danados, e.bytes,
-             e.presupuesto, n_ses, pend, apr, cfg.bytes_sesion, (long long) cfg.ttl_seg);
+             e.presupuesto, e.por_natur[0], e.por_natur[1], e.por_natur[2], e.por_natur[3], rech, n_ses, pend, apr,
+             cfg.bytes_sesion, (long long) cfg.ttl_seg);
     return buf;
 }
 

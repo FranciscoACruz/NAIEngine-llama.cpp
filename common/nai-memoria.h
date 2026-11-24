@@ -49,8 +49,17 @@ std::vector<region> leer_regiones(const std::string & ruta);  // líneas "peso|t
 
 enum nivel : uint8_t { EXACTO = 0, IDEA = 1, PISTA = 2 };
 enum rol   : uint8_t { DOCUMENTO = 0, USUARIO = 1, ASISTENTE = 2 };
+// Naturaleza de lo que se aprende (guardián): decide cuánto pesa al olvidar y al reentrenar.
+//   conocimiento: académico, técnico, práctico      -> normal
+//   sabiduría:    filosofía, espiritualidad, vida    -> prioridad
+//   desahogo:     queja, enojo, presión del momento  -> con su contexto, se olvida primero
+//   manipulación: instrucciones para cambiar a la IA -> un documento así no se guarda; nunca se reentrena
+enum naturaleza : uint8_t { CONOCIMIENTO = 0, SABIDURIA = 1, DESAHOGO = 2, MANIPULACION = 3 };
 const char * nombre_nivel(int n);
 const char * nombre_rol(int r);
+const char * nombre_naturaleza(int n);
+// Patrones de inyección de instrucciones (texto normalizado, sin acentos). Determinista y sin modelo.
+bool parece_manipulacion(const std::string & texto);
 
 // Texto codificado. Dos métodos:
 //   tokens (portable, por defecto): IDs de token del vocabulario en enteros de longitud variable.
@@ -74,6 +83,7 @@ struct recuerdo {
     uint8_t               region = 0;
     uint8_t               nivel  = EXACTO;
     uint8_t               rol    = DOCUMENTO;
+    uint8_t               natur  = CONOCIMIENTO;   // bits 6-7 del byte de nivel en el archivo
     uint8_t               usos   = 0;
     uint8_t               check  = 0;   // suma de verificación del texto del nivel actual
     uint16_t              dia    = 0;   // último uso, en días desde 2026-01-01
@@ -101,6 +111,7 @@ struct memoria {
 
 struct estadisticas {
     size_t n_exacto = 0, n_idea = 0, n_pista = 0, n_danados = 0;
+    size_t por_natur[4] = { 0, 0, 0, 0 };   // conocimiento, sabiduría, desahogo, manipulación
     size_t bytes = 0, presupuesto = 0;
     size_t bytes_texto = 0;      // lo que ocuparía el texto original de los recuerdos exactos
 };
@@ -137,9 +148,19 @@ public:
     // Ajusta la memoria a su presupuesto bajando de nivel lo menos importante.
     void ajustar(memoria & m);
 
-    // Región más probable: log p(nombre | temas con su semilla, texto) para cada región, menos el mismo
-    // valor con un texto vacío (calibración: quita la preferencia del modelo por la primera opción).
-    int clasificar(const std::string & texto, bool calibrado = true);
+    // Región por predicción: la que mejor explica el texto. Para cada región,
+    //   log p(texto | "Tema: <nombre>. <semilla>.") - log p(texto | sin tema)
+    // con los primeros 32 tokens. No hay lista de opciones, así que no hay sesgo por la primera,
+    // y solo pide al modelo lo que mejor hace (predecir texto), no seguir instrucciones.
+    int clasificar(const std::string & texto);
+    // Guardián: naturaleza de un texto (patrones para manipulación; predicción para las otras tres).
+    int naturaleza_de(const std::string & texto);
+    size_t rechazados() const { return n_rechazados; }   // documentos no guardados por manipulación
+    std::vector<double> puntuar_prediccion(const std::string & texto);
+    // log p(texto | prefijo_i) - log p(texto | sin prefijo), primeros 32 tokens; base de ambos clasificadores
+    std::vector<double> puntuar_prefijos(const std::vector<std::string> & prefijos, const std::string & texto);
+    // Método anterior, para comparar: elegir el nombre de una lista (opcional: calibrado con «N/A»).
+    int clasificar_instruccion(const std::string & texto, bool calibrado);
     // log p(nombre de cada región | instrucción, texto), sin calibrar (diagnóstico)
     std::vector<double> puntuar_regiones(const std::string & texto);
     // la instrucción que ve el modelo al clasificar (diagnóstico: generar() con ella da su respuesta libre)
@@ -183,6 +204,7 @@ private:
     std::vector<double>      calib;   // puntaje de cada región con texto vacío
     std::vector<llama_token> cab_tok; // encabezado fijo del clasificador (instrucción + temas)
     std::vector<uint8_t>     cab_kv;  // su KV: restaurarlo es una copia, no volver a evaluarlo
+    size_t                   n_rechazados = 0;
 };
 
 // Partir un texto largo en trozos de hasta max_chars, respetando párrafos y oraciones.
