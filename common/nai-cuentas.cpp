@@ -261,13 +261,15 @@ bool gestor::cargar() {
     std::ifstream f(ruta, std::ios::binary);
     if (!f) return false;
     std::string b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();   // en Windows un archivo abierto no se puede renombrar (apartarlo abajo fallaría)
     if (nai_cifrado::es_cifrado(b)) {
         std::string plano;
         if (!cla.activa || !nai_cifrado::descifrar(cla, b, "cuentas.dat", plano)) {
             // no se sobrescribe: se aparta para no perder las cuentas
             std::error_code ec;
             std::filesystem::rename(ruta, ruta + ".ilegible-" + std::to_string(ahora()), ec);
-            fprintf(stderr, "[NAI] cuentas: no se pudo descifrar %s (otra clave o sin --nai-cifrado); se apartó y se empieza sin cuentas\n", ruta.c_str());
+            fprintf(stderr, "[NAI] cuentas: no se pudo descifrar %s (otra clave o sin --nai-cifrado); %s y se empieza sin cuentas\n",
+                    ruta.c_str(), ec ? "NO se pudo apartar" : "se apartó");
             return false;
         }
         b = std::move(plano);

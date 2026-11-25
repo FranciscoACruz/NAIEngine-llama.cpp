@@ -1921,6 +1921,7 @@ bool servicio::trabajar_tarea() {
     if (!t->cargada) {
         std::ifstream f(t->ruta, std::ios::binary);
         std::string b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        f.close();   // cerrado antes de apartar_ilegible: en Windows no se renombra un archivo abierto
         bool bien = !b.empty();
         if (bien && nai_cifrado::es_cifrado(b)) {
             std::string plano;
