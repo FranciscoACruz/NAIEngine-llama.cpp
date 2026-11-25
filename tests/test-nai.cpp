@@ -501,6 +501,7 @@ static void test_cuentas() {
         std::ifstream f(dir / "cuentas.dat", std::ios::binary);
         std::string b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         NAI_CHECK(nai_cifrado::es_cifrado(b) && b.find("angelus") == std::string::npos);
+        f.close();   // en Windows un archivo abierto no se puede renombrar: g3 necesita apartarlo
         // con otra clave no se lee y NO se sobrescribe
         nai_cifrado::clave otra = cl; otra.k[0] ^= 1;
         nai_cuentas::gestor g3(dir.string(), otra, 30, 1000);

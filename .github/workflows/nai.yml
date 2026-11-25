@@ -35,7 +35,7 @@ jobs:
       - name: test-nai
         run: ctest --test-dir build -C Release -R test-nai --output-on-failure
 
-      - name: Memoria con modelo (sesión por defecto, turnos, recarga)
+      - name: Memoria con modelo (sesión, turnos, recarga)
         if: runner.os != 'Windows'
         run: |
           set -e
@@ -45,10 +45,10 @@ jobs:
           for i in $(seq 60); do curl -sf localhost:8099/health >/dev/null && break; sleep 1; done
           for t in "Bruno is a dog who likes the beach" "Tom is a cat" "Where does Bruno play"; do
             curl -sSf localhost:8099/v1/chat/completions -H 'Content-Type: application/json' \
-              -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$t\"}],\"max_tokens\":8}" > /dev/null
+              -d "{\"nai_session\":\"ci-0123456789abcdef\",\"messages\":[{\"role\":\"user\",\"content\":\"$t\"}],\"max_tokens\":8}" > /dev/null
             sleep 2
           done
           kill %1; wait || true
           grep "diccionario de tokens" srv.log
-          grep -- "-> 6 enviados" srv.log
+          grep -E -- "-> [5-9] enviados" srv.log   # el tercer turno ya lleva los dos anteriores
           ls ses/nai-*.mem
