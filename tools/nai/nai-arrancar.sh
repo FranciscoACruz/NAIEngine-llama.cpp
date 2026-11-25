@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# [NAI] Arranca NAI completo con un solo comando: el oído en segundo plano y NAI (que ve) al frente.
-# Ctrl+C cierra los dos. No cierra ningún otro programa: si un puerto está ocupado, avisa y se detiene.
+# [NAI] Arranca NAI completo con un solo comando (o ./nai.sh desde la raíz del repo): principal que ve,
+# oído, cerebelo, hipocampo y memoria. Cada pieza se carga si su modelo está en ~/nai-modelos.
+# Ctrl+C cierra todo. No cierra ningún otro programa: si un puerto está ocupado, avisa y se detiene.
 #
-#   bash tools/nai/nai-arrancar.sh            # NAI con ojos (Qwen3-VL) y oído (Qwen3-ASR)
-#   bash tools/nai/nai-arrancar.sh --sin-oido # solo NAI
+#   bash tools/nai/nai-arrancar.sh            # todo: ojos (Qwen3-VL), oído (Qwen3-ASR), cerebelo, hipocampo
+#   bash tools/nai/nai-arrancar.sh --sin-oido # sin oído
+#   bash tools/nai/nai-arrancar.sh --sin-cerebelo --sin-hipocampo   # más ligero (8 GB justos)
 #   bash tools/nai/nai-arrancar.sh --whisper ~/nai-modelos/ggml-small.bin   # oído con whisper-server
 #   bash tools/nai/nai-arrancar.sh --texto    # modelo de solo texto (Qwen3-1.7B), sin sentidos
 #
@@ -26,8 +28,8 @@ PRINCIPAL="${NAI_PRINCIPAL:-$MODELOS/Qwen3-VL-2B-Instruct-Q8_0.gguf}"
 PROYECTOR="${NAI_PROYECTOR:-$MODELOS/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf}"
 OIDO_MODELO="${NAI_OIDO_MODELO:-$MODELOS/Qwen3-ASR-0.6B-Q8_0.gguf}"
 OIDO_PROYECTOR="${NAI_OIDO_PROYECTOR:-$MODELOS/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf}"
-CEREBELO="${NAI_CEREBELO:-}"
-HIPOCAMPO="${NAI_HIPOCAMPO:-}"
+CEREBELO="${NAI_CEREBELO:-$MODELOS/Qwen3-0.6B-Q8_0.gguf}"
+HIPOCAMPO="${NAI_HIPOCAMPO:-$MODELOS/Qwen3-Embedding-0.6B-Q8_0.gguf}"
 SIN_OIDO=0
 WHISPER=""
 TEXTO=0
@@ -35,9 +37,11 @@ TEXTO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --sin-oido) SIN_OIDO=1 ;;
+    --sin-cerebelo)  CEREBELO="" ;;
+    --sin-hipocampo) HIPOCAMPO="" ;;
     --whisper)  WHISPER="${2:-}"; shift ;;
     --texto)    TEXTO=1 ;;
-    -h|--help)  sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "Opción desconocida: $1 (usa --help)"; exit 1 ;;
   esac
   shift
@@ -64,6 +68,9 @@ esperar() {   # esperar URL PID nombre
 [ -f "$PRINCIPAL" ] || falta "No encuentro el modelo principal: $PRINCIPAL"
 [ -z "$PROYECTOR" ] || [ -f "$PROYECTOR" ] || falta "No encuentro el proyector de visión: $PROYECTOR"
 puerto_ocupado "$PUERTO" && falta "El puerto $PUERTO está ocupado (revisa con: lsof -nP -iTCP:$PUERTO -sTCP:LISTEN). Usa otro con NAI_PUERTO=8090"
+# cerebelo e hipocampo: opcionales; si su modelo no está, NAI arranca sin ellos
+if [ -n "$CEREBELO" ] && [ ! -f "$CEREBELO" ]; then echo "! Sin cerebelo (no está $CEREBELO): la memoria la lleva el principal"; CEREBELO=""; fi
+if [ -n "$HIPOCAMPO" ] && [ ! -f "$HIPOCAMPO" ]; then echo "! Sin hipocampo (no está $HIPOCAMPO): se relaciona solo por palabras"; HIPOCAMPO=""; fi
 command -v ffmpeg >/dev/null 2>&1 || echo "! Sin ffmpeg: no podrá ver videos ni oír notas de voz que no sean WAV/MP3/FLAC (brew install ffmpeg)"
 
 mkdir -p "$DATOS"
@@ -119,4 +126,7 @@ ARGS=(-m "$PRINCIPAL" --port "$PUERTO" -fitt 3072 -c "$CONTEXTO" --context-shift
 [ -n "${NAI_EXTRA:-}" ] && ARGS+=(${NAI_EXTRA})
 
 echo "· Arrancando NAI en http://127.0.0.1:$PUERTO  (Ctrl+C para cerrar todo)"
+nombre() { if [ -n "$1" ]; then basename "$1"; else echo no; fi; }
+echo "  principal: $(basename "$PRINCIPAL")${PROYECTOR:+ (ve)} | oído: ${URL_OIDO:-no} | cerebelo: $(nombre "$CEREBELO") | hipocampo: $(nombre "$HIPOCAMPO")"
+echo "  Si sale «el cerebelo tiene otro vocabulario», vuelve a arrancar con --sin-cerebelo"
 "$SERVIDOR" "${ARGS[@]}"
