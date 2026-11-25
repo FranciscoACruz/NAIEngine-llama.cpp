@@ -42,13 +42,13 @@ cmake --build build -j 4 --target llama-server test-nai
 ./build/bin/test-nai
 ```
 
-Descarga los modelos (unos 5 GB, gratis y sin cuenta; lista completa en §2.6) a `~/nai-modelos` y arranca:
+Y arranca:
 
 ```console
 ./nai.sh
 ```
 
-`./nai.sh` levanta el principal que ve (Qwen3-VL-2B), el oído (Qwen3-ASR), el cerebelo, el hipocampo y la memoria; si falta un modelo, dice cuál. Abre `http://localhost:8080` en el navegador o usa la API (§3.2). Ctrl+C cierra todo.
+`./nai.sh` levanta el principal que ve (Qwen3-VL-2B), el oído (Qwen3-ASR), el cerebelo, el hipocampo y la memoria. La primera vez descarga a `~/nai-modelos` los modelos que falten (unos 5 GB, gratis y sin cuenta; lista en §2.6); si la descarga se corta, vuelve a correrlo y continúa donde se quedó. Abre `http://localhost:8080` en el navegador o usa la API (§3.2). Ctrl+C cierra todo.
 
 Para una prueba mínima con un solo modelo chico, sin sentidos ni memoria:
 
@@ -136,7 +136,7 @@ No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_r
 
 NAI usa modelos GGUF, igual que llama.cpp. Son de pesos abiertos: se descargan gratis, sin cuenta, y corren en tu equipo sin internet.
 
-**NAI completo** (lo que arranca `./nai.sh`), en `~/nai-modelos`:
+**NAI completo** (lo que arranca `./nai.sh`), en `~/nai-modelos`. `./nai.sh` los descarga solo si faltan (`--sin-descargar` para que solo avise); los comandos de abajo sirven para bajarlos a mano:
 
 | Papel | Archivo | Tamaño |
 |---|---|---|
@@ -401,7 +401,7 @@ Configuración recomendada para una Mac de 8 GB: el principal ve por sí mismo y
 ./build/bin/llama-server -m Qwen3-ASR-0.6B-Q8_0.gguf --mmproj mmproj-Qwen3-ASR-0.6B-Q8_0.gguf --port 8082 -fitt 1024
 ```
 
-**Atajo: `./nai.sh`** desde la raíz del repo arranca todo con un solo comando: principal que ve, oído en segundo plano, cerebelo, hipocampo y memoria para la interfaz web. No arranca a medias: si falta el modelo de alguna parte en `~/nai-modelos`, dice cuál y se detiene. Si el oído o NAI se caen mientras trabajan, se vuelven a levantar solos en segundos (la memoria está en disco), y Ctrl+C cierra todo. Opciones (solo si decides prescindir de algo): `--sin-oido`, `--sin-cerebelo`, `--sin-hipocampo`; `--whisper ARCHIVO` para oír con whisper-server, `--texto` para el modelo de solo texto, y variables como `NAI_PUERTO=8090` (`./nai.sh --help` las lista). El script real es `tools/nai/nai-arrancar.sh`.
+**Atajo: `./nai.sh`** desde la raíz del repo arranca todo con un solo comando: principal que ve, oído en segundo plano, cerebelo, hipocampo y memoria para la interfaz web. No arranca a medias: si falta el modelo de alguna parte en `~/nai-modelos`, lo descarga (un archivo a medias nunca queda con su nombre final, y una descarga cortada continúa la próxima vez); si no puede, dice cuál falta y se detiene. Si el oído o NAI se caen mientras trabajan, se vuelven a levantar solos en segundos (la memoria está en disco), y Ctrl+C cierra todo. Opciones (solo si decides prescindir de algo): `--sin-oido`, `--sin-cerebelo`, `--sin-hipocampo`; `--whisper ARCHIVO` para oír con whisper-server, `--texto` para el modelo de solo texto, y variables como `NAI_PUERTO=8090` (`./nai.sh --help` las lista). El script real es `tools/nai/nai-arrancar.sh`.
 
 - **Ojos.** Si el principal ya ve (`--mmproj`), los ojos son el mismo servidor; no hace falta `--nai-ojos`. Con un principal que solo lee texto, `--nai-ojos http://127.0.0.1:8083` apunta a otro `llama-server` con un modelo de visión.
 - **Oído.** `--nai-oido` acepta un `llama-server` con un modelo de audio (Qwen3-ASR, Voxtral, Ultravox) o un `whisper-server` de whisper.cpp con la URL terminada en `/inference`. El audio en llama.cpp aún es experimental; whisper es el respaldo.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # [NAI] Arranca NAI completo con un solo comando (o ./nai.sh desde la raíz del repo): principal que ve,
 # oído, cerebelo, hipocampo y memoria. Si falta el modelo de alguna parte, no arranca a medias: dice cuál falta.
+# Si falta un modelo conocido, lo descarga de Hugging Face (gratis, sin cuenta; continúa descargas cortadas).
 # Si el oído o NAI se caen mientras trabajan, se vuelven a levantar solos (la memoria está en disco).
 # Ctrl+C cierra todo. No cierra ningún otro programa: si un puerto está ocupado, avisa y se detiene.
 #
@@ -8,6 +9,7 @@
 #   bash tools/nai/nai-arrancar.sh --sin-oido # sin oído
 #   bash tools/nai/nai-arrancar.sh --sin-cerebelo --sin-hipocampo   # solo si decides prescindir de ellos
 #   bash tools/nai/nai-arrancar.sh --whisper ~/nai-modelos/ggml-small.bin   # oído con whisper-server
+#   bash tools/nai/nai-arrancar.sh --sin-descargar   # no descargar nada: solo avisar qué falta
 #   bash tools/nai/nai-arrancar.sh --texto    # modelo de solo texto (Qwen3-1.7B), sin sentidos
 #
 # Todo se puede cambiar con variables de entorno, por ejemplo:
@@ -32,6 +34,7 @@ OIDO_PROYECTOR="${NAI_OIDO_PROYECTOR:-$MODELOS/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf}"
 CEREBELO="${NAI_CEREBELO:-$MODELOS/Qwen3-0.6B-Q8_0.gguf}"
 HIPOCAMPO="${NAI_HIPOCAMPO:-$MODELOS/Qwen3-Embedding-0.6B-Q8_0.gguf}"
 SIN_OIDO=0
+DESCARGAR=1
 WHISPER=""
 TEXTO=0
 
@@ -42,6 +45,7 @@ while [ $# -gt 0 ]; do
     --sin-hipocampo) HIPOCAMPO="" ;;
     --whisper)  WHISPER="${2:-}"; shift ;;
     --texto)    TEXTO=1 ;;
+    --sin-descargar) DESCARGAR=0 ;;
     -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "Opción desconocida: $1 (usa --help)"; exit 1 ;;
   esac
@@ -55,6 +59,36 @@ if [ "$TEXTO" = 1 ]; then
 fi
 
 falta() { echo "✗ $1"; exit 1; }
+
+# Modelos que NAI sabe descargar (por nombre de archivo). Otros nombres (los que pongas con NAI_...) no se descargan.
+url_de() {
+  case "$(basename "$1")" in
+    Qwen3-VL-2B-Instruct-Q8_0.gguf|mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf)
+      echo "https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/$(basename "$1")" ;;
+    Qwen3-ASR-0.6B-Q8_0.gguf|mmproj-Qwen3-ASR-0.6B-Q8_0.gguf)
+      echo "https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/$(basename "$1")" ;;
+    Qwen3-0.6B-Q8_0.gguf)            echo "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf" ;;
+    Qwen3-1.7B-Q8_0.gguf)            echo "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf" ;;
+    Qwen3-Embedding-0.6B-Q8_0.gguf)  echo "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf" ;;
+    *) echo "" ;;
+  esac
+}
+
+# asegurar RUTA DESCRIPCIÓN: si el archivo no está, lo descarga a RUTA.parte y al terminar lo renombra
+# (un archivo a medias nunca queda con el nombre final; si se corta, la próxima vez continúa).
+asegurar() {
+  [ -f "$1" ] && return 0
+  local url; url="$(url_de "$1")"
+  if [ "$DESCARGAR" = 0 ] || [ -z "$url" ]; then
+    falta "No encuentro $2: $1"
+  fi
+  mkdir -p "$(dirname "$1")"
+  echo "· Descargando $2: $(basename "$1")"
+  if ! curl -L --fail --retry 5 --retry-delay 3 -C - -o "$1.parte" "$url"; then
+    falta "No se pudo descargar $2 ($url). Revisa el internet y vuelve a correr ./nai.sh: continúa donde se quedó"
+  fi
+  mv "$1.parte" "$1"
+}
 puerto_ocupado() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 esperar() {   # esperar URL PID nombre
   for _ in $(seq 1 180); do
@@ -68,12 +102,16 @@ esperar() {   # esperar URL PID nombre
 [ -x "$SERVIDOR" ] || falta "No está compilado en este equipo. Desde $RAIZ corre:
     cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build -j4 --target llama-server"
-[ -f "$PRINCIPAL" ] || falta "No encuentro el modelo principal: $PRINCIPAL"
-[ -z "$PROYECTOR" ] || [ -f "$PROYECTOR" ] || falta "No encuentro el proyector de visión: $PROYECTOR"
 puerto_ocupado "$PUERTO" && falta "El puerto $PUERTO está ocupado (revisa con: lsof -nP -iTCP:$PUERTO -sTCP:LISTEN). Usa otro con NAI_PUERTO=8090"
+asegurar "$PRINCIPAL" "el modelo principal"
+[ -z "$PROYECTOR" ] || asegurar "$PROYECTOR" "el proyector de visión"
 # todas las partes: si falta un modelo, no se arranca a medias (las --sin-... son decisión explícita)
-[ -z "$CEREBELO" ]  || [ -f "$CEREBELO" ]  || falta "No encuentro el cerebelo: $CEREBELO (descárgalo, o arranca con --sin-cerebelo si decides no usarlo)"
-[ -z "$HIPOCAMPO" ] || [ -f "$HIPOCAMPO" ] || falta "No encuentro el hipocampo: $HIPOCAMPO (descárgalo, o arranca con --sin-hipocampo si decides no usarlo)"
+[ -z "$CEREBELO" ]  || asegurar "$CEREBELO" "el cerebelo"
+[ -z "$HIPOCAMPO" ] || asegurar "$HIPOCAMPO" "el hipocampo"
+if [ "$SIN_OIDO" = 0 ] && [ -z "$WHISPER" ]; then
+  asegurar "$OIDO_MODELO" "el oído"
+  asegurar "$OIDO_PROYECTOR" "el proyector del oído"
+fi
 command -v ffmpeg >/dev/null 2>&1 || echo "! Sin ffmpeg: no podrá ver videos ni oír notas de voz que no sean WAV/MP3/FLAC (brew install ffmpeg)"
 
 mkdir -p "$DATOS"
