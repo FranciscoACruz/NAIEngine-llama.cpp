@@ -90,6 +90,8 @@ add_library(${TARGET}
     nai-lector.h
     nai-memoria.cpp
     nai-memoria.h
+    nai-sentidos.cpp
+    nai-sentidos.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp

@@ -7,6 +7,7 @@
 #include "../common/TriageWrapper.h"
 #include "../src/nai-session-table.hpp"
 #include <filesystem>
+#include "nai-sentidos.h"
 #include <fstream>
 #include <ctime>
 #include "../common/nai-memoria.h"
@@ -529,7 +530,26 @@ static void test_bucle() {
     std::printf("%s\n", "[test-nai] anti-bucle OK");
 }
 
+// [NAI] Sentidos: reconocer imágenes, audio y video por sus primeros bytes, el Content-Type o la extensión.
+static void test_sentidos() {
+    using nai_sentidos::tipo_medio;
+    NAI_CHECK(tipo_medio("", "", std::string("\x89PNG\r\n\x1a\n", 8)) == "imagen");
+    NAI_CHECK(tipo_medio("x.bin", "", std::string("\xFF\xD8\xFF\xE0", 4)) == "imagen");
+    NAI_CHECK(tipo_medio("", "", std::string("RIFF\0\0\0\0WAVEfmt ", 16)) == "audio");
+    NAI_CHECK(tipo_medio("", "", std::string("RIFF\0\0\0\0WEBPVP8 ", 16)) == "imagen");
+    NAI_CHECK(tipo_medio("", "", std::string("\0\0\0\x18" "ftypisom", 12)) == "video");
+    NAI_CHECK(tipo_medio("", "", std::string("\0\0\0\x18" "ftypM4A ", 12)) == "audio");
+    NAI_CHECK(tipo_medio("nota.webm", "audio/webm", std::string("\x1A\x45\xDF\xA3", 4)) == "audio");   // nota de voz
+    NAI_CHECK(tipo_medio("clip.webm", "", std::string("\x1A\x45\xDF\xA3", 4)) == "video");
+    NAI_CHECK(tipo_medio("cancion.mp3", "", "") == "audio" && tipo_medio("", "image/jpeg", "") == "imagen");
+    NAI_CHECK(tipo_medio("doc.pdf", "application/pdf", "%PDF-1.7") == "" && tipo_medio("a.txt", "text/plain", "hola") == "");
+    NAI_CHECK(tipo_medio("logo.svg", "image/svg+xml", "<svg") == "");   // SVG es texto, no se manda a los ojos
+    NAI_CHECK(nai_sentidos::mime_de("audio", std::string("ID3\x04", 4)) == "audio/mpeg");
+    std::printf("%s\n", "[test-nai] sentidos OK (imagen, audio, video)");
+}
+
 int main() {
+    test_sentidos();
     test_entropia();
     test_memoria();
     test_cifrado();

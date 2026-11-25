@@ -1785,6 +1785,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_ESPECIALISTA"));
     add_opt(common_arg(
+        {"--nai-ojos"}, "URL",
+        "[NAI] servidor que ve (p. ej. http://127.0.0.1:8082: llama-server con Qwen3-VL-2B y su --mmproj). Describe las "
+        "imágenes y los cuadros de video del chat, de las URL y de /nai/aprender, para un modelo principal que no ve y "
+        "para que la memoria y la biblioteca las recuerden. Si el principal ya ve (--mmproj), por defecto es el propio servidor",
+        [](common_params & params, const std::string & value) {
+            params.nai_ojos = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_OJOS"));
+    add_opt(common_arg(
+        {"--nai-oido"}, "URL",
+        "[NAI] servidor que oye: llama-server con modelo de audio (p. ej. Qwen3-ASR-0.6B y su --mmproj) o whisper-server "
+        "(URL terminada en /inference). Transcribe el audio y la pista de los videos. Si el principal ya oye, por defecto es el propio servidor",
+        [](common_params & params, const std::string & value) {
+            params.nai_oido = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_OIDO"));
+    add_opt(common_arg(
+        {"--nai-cuadros"}, "N",
+        string_format("[NAI] cuadros que se toman de cada video para los ojos (1 a 16; requiere ffmpeg) (default: %d)", params.nai_cuadros),
+        [](common_params & params, int value) {
+            params.nai_cuadros = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NAI_CUADROS"));
+    add_opt(common_arg(
         {"--nai-hipocampo"}, "FNAME",
         "[NAI] modelo de embeddings (p. ej. Qwen3-Embedding-0.6B) para relacionar recuerdos por significado, "
         "además de por palabras clave. Cada recuerdo guarda una firma de 32 bytes",

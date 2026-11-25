@@ -289,7 +289,7 @@ python3 tools/nai/nai_bench.py -m qwen2.5-0.5b-instruct-q4_k_m.gguf --rondas 3 -
 bash tools/nai/probar-nai.sh qwen2.5-0.5b-instruct-q4_k_m.gguf     # prueba completa: compilar, medir, conversar, aprender
 ```
 
-### 3.8 Varios modelos: cerebelo, hipocampo, especialista y voz
+### 3.8 Varios modelos: cerebelo, hipocampo, especialista, sentidos y voz
 
 NAI puede repartir el trabajo como las partes de un cerebro (detalle en `docs/RUTA_INFORMACION.md`). Cada pieza es opcional; sin ellas, el modelo principal hace todo.
 
@@ -306,7 +306,9 @@ NAI puede repartir el trabajo como las partes de un cerebro (detalle en `docs/RU
 | Cerebelo | `--nai-cerebelo FILE` | Un modelo chico se encarga de la memoria, el guardián y la clasificación; el principal solo conversa. Para usarlo también como borrador especulativo, pásalo además con `-md` (debe ser de la misma familia que el principal) |
 | Hipocampo | `--nai-hipocampo FILE` | Un modelo de embeddings relaciona por significado: «mi mascota» encuentra «mi perro» aunque no compartan palabras. Calibra el umbral con `nai_memoria --hipocampo` |
 | Especialista | `--nai-especialista URL` | Las preguntas de código y ciberseguridad técnica van a otro `llama-server` (por ejemplo, Qwen2.5-Coder en el 8081). Si no está corriendo, responde el principal: se arranca solo cuando se necesita |
-| Oído y voz | `tools/nai/nai-voz.sh` | Habla con NAI: graba (sox), transcribe en español (whisper.cpp), envía con una sesión y lee la respuesta (`say` en macOS) |
+| Ojos | `--mmproj FILE` en el principal, o `--nai-ojos URL` | NAI ve imágenes y videos (sección 3.9) |
+| Oído | `--nai-oido URL` | NAI oye audios, notas de voz y la pista de los videos (sección 3.9) |
+| Voz (hablar con NAI) | `tools/nai/nai-voz.sh` | Habla con NAI: graba (sox), transcribe en español (whisper.cpp), envía con una sesión y lee la respuesta (`say` en macOS) |
 
 `--reasoning off` apaga el modo de pensamiento de Qwen3 para que la plática sea fluida; una petición puede pedirlo con `"chat_template_kwargs": {"enable_thinking": true}` (por ejemplo, para lógica o matemáticas). Los modelos: [Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF), [Qwen3-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF), [Qwen3-Embedding-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF).
 
@@ -317,6 +319,37 @@ El especialista se arranca aparte, cuando se necesite:
 ```
 
 Para hablar con NAI (macOS): `brew install whisper-cpp sox`, descarga un modelo de Whisper (`ggml-small.bin` o `ggml-large-v3-turbo-q5_0.bin`) y ejecuta `bash tools/nai/nai-voz.sh -w ggml-small.bin`.
+
+### 3.9 Sentidos: imágenes, audio y video
+
+NAI piensa y recuerda en texto. Lo que entra por los sentidos se le pasa al modelo principal tal cual si él lo entiende (un modelo de visión o de audio con su `--mmproj`); si no, los **ojos** o el **oído** lo convierten en texto antes. Así responde, lo recuerda en la memoria y lo aprende en la biblioteca.
+
+| Entra | Por dónde | Qué hace NAI |
+|---|---|---|
+| Imagen adjunta en el chat | `image_url` (la interfaz web la deja adjuntar) | El principal la ve, o los ojos la describen (texto visible incluido) |
+| Audio o nota de voz | `input_audio` (WAV, MP3, FLAC; con ffmpeg también OGG, WEBM, M4A) | El principal la oye, o el oído la transcribe |
+| Video | `input_video` (MP4, MOV, WEBM, MKV, AVI; requiere ffmpeg) | Toma `--nai-cuadros` cuadros para los ojos y la pista de audio para el oído |
+| URL de imagen, audio o video en el texto | como cualquier URL de la plática | La abre, se la pasa al principal si la entiende y, si escribe el dueño, aprende su descripción |
+| Archivo o URL en `POST /nai/aprender` | `{"nombre": "foto.jpg", "archivo": "<base64>"}` o `{"url": ...}` | La biblioteca guarda la descripción o la transcripción |
+
+Configuración recomendada para una Mac de 8 GB: el principal ve por sí mismo y el oído va aparte.
+
+```console
+./build/bin/llama-server -m Qwen3-VL-2B-Instruct-Q8_0.gguf --mmproj mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf \
+  --port 8080 -fitt 3072 -c 8192 --context-shift --nai-desalojo \
+  --nai-memoria --nai-sesiones ~/nai-datos --nai-oido http://127.0.0.1:8082
+
+./build/bin/llama-server -m Qwen3-ASR-0.6B-Q8_0.gguf --mmproj mmproj-Qwen3-ASR-0.6B-Q8_0.gguf --port 8082 -fitt 1024
+```
+
+- **Ojos.** Si el principal ya ve (`--mmproj`), los ojos son el mismo servidor; no hace falta `--nai-ojos`. Con un principal que solo lee texto, `--nai-ojos http://127.0.0.1:8083` apunta a otro `llama-server` con un modelo de visión.
+- **Oído.** `--nai-oido` acepta un `llama-server` con un modelo de audio (Qwen3-ASR, Voxtral, Ultravox) o un `whisper-server` de whisper.cpp con la URL terminada en `/inference`. El audio en llama.cpp aún es experimental; whisper es el respaldo.
+- **ffmpeg** (`brew install ffmpeg`) hace falta para video y para audio que no sea WAV, MP3 o FLAC.
+- Las peticiones de NAI a sus propios sentidos llevan la cabecera `X-NAI-Sentido`: no pasan por la memoria, las URL ni el especialista. Con `--nai-login`, el principal no se puede describir a sí mismo para la biblioteca: usa `--nai-ojos`/`--nai-oido` con otro servidor.
+- Lo que describen los ojos (por ejemplo, el texto de un cartel en una foto) llega como datos, no como instrucciones, y pasa por el guardián antes de aprenderse.
+- Una misma imagen, audio o video se describe una sola vez aunque la interfaz lo reenvíe en cada turno.
+
+Modelos: [Qwen3-VL-2B-Instruct-GGUF](https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF) (1.8 GB más un proyector de 445 MB) y [Qwen3-ASR-0.6B-GGUF](https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF) (805 MB más 214 MB).
 
 ---
 
@@ -346,6 +379,9 @@ Para hablar con NAI (macOS): `brew install whisper-cpp sox`, descarga un modelo 
 | Umbral del hipocampo | `--nai-hipocampo-umbral F` | `0.5` | — | Similitud mínima para traer un recuerdo sin palabras en común; calíbralo con `nai_memoria --hipocampo` |
 | URL en la plática | `--nai-sin-urls` para apagarlo | siempre encendido, desde cualquier cliente (interfaz web incluida), con o sin sesión y aun sin `--nai-memoria` | Lee las páginas (HTML, PDF, texto) | Si el mensaje trae una URL (hasta 2), NAI la abre y responde con su contenido (el principio, como datos y no como instrucciones). Con `--nai-memoria`, si quien escribe es el dueño, la aprende completa en la biblioteca, una vez por URL; un invitado solo la usa para su respuesta. Una página con manipulación no se usa ni se aprende; una que no abre, se le dice al usuario |
 | Anti-bucle | `--nai-anti-bucle N` | `8` (`0` = apagado) | Corta respuestas degeneradas | Si la salida repite el mismo fragmento N veces seguidas (bucle de repetición de modelos chicos con respuestas largas), se detiene. El guardián tampoco guarda ni reentrena texto en bucle |
+| Ojos | `--nai-ojos URL` | el propio servidor si el principal tiene `--mmproj` de visión | Ve imágenes y videos | Describe lo que el principal no ve, y lo que se aprende en la biblioteca |
+| Oído | `--nai-oido URL` | el propio servidor si el principal oye | Oye audio | `llama-server` con modelo de audio, o `whisper-server` (URL terminada en `/inference`) |
+| Cuadros de video | `--nai-cuadros N` | 6 | Video | Cuadros que se toman de cada video para los ojos (requiere ffmpeg) |
 | Especialista | `--nai-especialista URL` | apagado | Responde otro modelo | Las preguntas de código van a otro `llama-server`; si no responde, contesta el principal |
 | Memoria compacta | `--nai-memoria-compacta` | apagada (portable) | — | Codifica los recuerdos con el modelo: ocupan menos, pero solo se leen con el mismo modelo, backend, `-ngl`, hilos y versión |
 | Tamaño de la biblioteca | `--nai-biblioteca-bytes N` | `8388608` (8 MiB) | — | Presupuesto de lo aprendido de documentos |
@@ -586,7 +622,7 @@ El modelo también aprende a distinguir las cuatro naturalezas (un ejemplo por r
 | Entrada | Cómo se lee |
 |---|---|
 | `{"texto": "..."}` | Directo |
-| `{"url": "https://..."}` | Descarga (máx. 16 MiB, 5 redirecciones); en páginas HTML se toma el contenido principal y se quitan menús y pies. Rechaza localhost, redes privadas, enlace local y metadatos de nube salvo `--nai-lector-red-local`; la IP validada se fija para la conexión |
+| `{"url": "https://..."}` | Descarga (máx. 48 MiB, 5 redirecciones); en páginas HTML se toma el contenido principal y se quitan menús y pies. Rechaza localhost, redes privadas, enlace local y metadatos de nube salvo `--nai-lector-red-local`; la IP validada se fija para la conexión |
 | `{"archivo": "<base64>", "nombre": "x.pdf"}` | Por extensión: txt, md, csv, json, código → directo (Latin-1 se convierte a UTF-8); html → sin etiquetas, scripts ni estilos; pdf → `pdftotext`; docx, doc, rtf, odt, pages → `textutil` (macOS) o `pandoc` |
 
 **Tareas pequeñas en disco.** Un texto más largo que `--nai-parte` (8000) caracteres se parte y cada parte se guarda en `DIR/cola/<n>.tarea` (cifrada si hay clave). Un solo hilo procesa un trozo a la vez y cede el paso, en este orden, a quien espera recordar, a quien está generando y a los turnos de la conversación; los documentos esperan lo que haga falta. Al apagar, lo que falta de la parte en curso vuelve a su archivo; al arrancar se reanuda. Más de `--nai-cola` caracteres pendientes → 429. `GET /nai/tareas` muestra el avance; `GET /nai/memoria` responde de una copia de las estadísticas sin esperar al motor.
@@ -801,6 +837,7 @@ petición HTTP ──► server-context.cpp
 | `common/TriageWrapper.h` | Triaje de prompts |
 | `common/nai-memoria.h/.cpp` | Memoria reconstructiva: diccionario de tokens (portable, por defecto) o rANS guiado por el modelo, niveles, claves con segundo salto, turnos recientes, presupuesto, archivo `.mem` y servicio con hilo de trabajo que cede el paso a las peticiones activas |
 | `common/nai-lector.h/.cpp` | Lector único: URLs (con protección de red interna), HTML, PDF, Word, RTF, ODT y texto; lo usan servidor, CLI (`/read`) y `--tools read_file` |
+| `common/nai-sentidos.h/.cpp` | Ojos y oído: reconoce imágenes, audio y video, los describe o transcribe con otro servidor (o el mismo) y saca cuadros y audio de los videos con ffmpeg |
 | `.github/workflows/nai.yml` | CI: compila y prueba NAI en Linux, macOS y Windows |
 | `tools/server/server.cpp` | Enrutamiento al especialista (`--nai-especialista`), con el proxy del modo router |
 | `tools/nai/probar-nai.sh` | Prueba completa de punta a punta: compilar, medir, conversar, aprender |
@@ -915,6 +952,8 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 | Archivos `._*` en el repositorio | macOS en discos no APFS | `find . -name '._*' -delete` y no los agregues a git |
 | `GGML_ASSERT(n_tokens_all <= cparams.n_batch)` | Se envió a `llama_decode` un lote mayor que `n_batch` | Error del llamador: sube `-b`/`-ub` o divide el lote |
 | La respuesta repite lo mismo sin parar («Nikolái I, Larisa, Nikolái I…») | Bucle de repetición: el modelo chico perdió el hilo, sobre todo con textos muy largos que no caben en su contexto | Corregido en NAI: `--nai-anti-bucle` lo corta. Para textos largos o libros, pásale la URL o el archivo para que los lea (un modelo no trae libros memorizados) y pide partes concretas |
+| «No puedo ver imágenes» o «image input is not supported» | El principal solo lee texto y no hay ojos | Usa un modelo de visión con su `--mmproj` (sección 3.9) o `--nai-ojos URL`. Revisa al arrancar la línea `[NAI] sentidos` |
+| El video o la nota de voz no se entienden | Falta ffmpeg | `brew install ffmpeg` |
 | El modelo dice que no puede abrir enlaces | La plática no abría las URL | Corregido en NAI: las URL del mensaje se leen siempre (v7.6, ya no hace falta sesión ni `--nai-memoria`); con `--nai-memoria` el dueño además hace que se aprendan. Si aun así lo dice, revisa en la terminal la línea `[NAI] URL del mensaje` |
 | `Context size has been exceeded.` / `request exceeds the available context size` | Contexto lleno | Corregido en NAI: el historial se recorta solo. Si la respuesta se corta a media frase (`finish_reason: length`), agrega `--context-shift` o sube `-c` |
 | HTTP 500 «does not match the expected … format» | El modelo produjo una salida que el parser de chat no reconoce | Corregido en NAI: la respuesta se entrega como texto y el log muestra `unparsed … output` |

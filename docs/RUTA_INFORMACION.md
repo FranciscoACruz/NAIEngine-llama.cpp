@@ -12,7 +12,9 @@ Este documento sigue el camino de la información desde que entra a NAI hasta qu
 | Hipocampo | `--nai-hipocampo embeddings.gguf` | Funciona; umbral por calibrar con modelos reales |
 | Especialista en código | `--nai-especialista URL` | Funciona; sin recuerdos de NAI todavía |
 | Borrador especulativo | `-md` con el modelo del cerebelo | Funciona (llama.cpp); velocidad por medir |
-| Oído y voz | `tools/nai/nai-voz.sh` | Funciona en pruebas simuladas; falta probarlo con micrófono |
+| Ojos (imágenes y video) | `--mmproj` en el principal o `--nai-ojos URL` | Funciona con un servidor de prueba; falta medir con Qwen3-VL-2B en la Mac |
+| Oído (audio en el chat) | `--nai-oido URL` | Funciona con un servidor de prueba; falta medir con Qwen3-ASR o whisper-server |
+| Voz (hablar con NAI) | `tools/nai/nai-voz.sh` | Funciona en pruebas simuladas; falta probarlo con micrófono |
 | Identidad LoRA | `nai_reentrenar.py` + `--lora` | El proceso existe; falta entrenarlo |
 
 ## 1. Mapa general
@@ -55,7 +57,8 @@ La tabla dice qué modelo se propone para cada papel (cada uno se pasa con su fl
 | **Especialista en código** (bajo demanda) | Qwen2.5-Coder-1.5B-Instruct | ~1.0 GB | Ciberseguridad técnica (código, configuraciones, análisis), programación e ingeniería de software |
 | **Cerebelo** (memoria y reparto) | Qwen3-0.6B | ~0.4 GB | Ningún tema propio: guarda, clasifica región y naturaleza, propone tokens al principal (especulación) y decide a quién va cada pregunta |
 | **Hipocampo** (asociación) | Qwen3-Embedding-0.6B (Apache 2.0) | ~0.4 GB | Ningún tema propio: convierte cada recuerdo y cada pregunta en un vector de significado para relacionarlos |
-| **Oído** (voz a texto) | Whisper large-v3-turbo con whisper.cpp; con 8 GB justos, Whisper small | ~0.6 GB / ~0.2 GB | Transcribir lo que hablas, en español |
+| **Ojos** (imágenes y video) | Qwen3-VL-2B-Instruct como principal (con su `--mmproj`), o aparte con `--nai-ojos` | ~1.8 GB + 0.45 GB (Q8) | Ver fotos, capturas, documentos fotografiados y cuadros de video; describirlos para la memoria y la biblioteca |
+| **Oído** (voz a texto) | Qwen3-ASR-0.6B con `--nai-oido`, o Whisper (whisper.cpp; `whisper-server` o `nai-voz.sh`); con 8 GB justos, Whisper small | ~0.8 GB + 0.2 GB / ~0.2 GB | Transcribir lo que hablas, las notas de voz, los audios y la pista de los videos |
 | **Voz** (texto a voz) | La voz del sistema (`say` en macOS) para empezar; después OuteTTS 1.0 0.6B | 0 / ~0.4 GB | Leer en voz alta la respuesta de NAI |
 
 Notas:
@@ -75,7 +78,17 @@ flowchart LR
     V --> BOC["Bocina"]
 ```
 
-La voz entra y sale **por fuera** del servidor: el oído convierte el audio en texto antes de entrar y la voz lee la respuesta al salir. La memoria, el guardián y la identidad no cambian. Lo que se guarda es el texto transcrito, no el audio.
+Los sentidos dentro del servidor (sección 3.9 del README): una imagen, un audio o un video que llega por el chat, por una URL o por `/nai/aprender` se le pasa al principal si él lo entiende; si no, los ojos (`--nai-ojos`) o el oído (`--nai-oido`) lo convierten en texto. Ese texto es lo que guardan la memoria y la biblioteca, y pasa por el guardián como cualquier documento.
+
+```mermaid
+flowchart LR
+    IMG["Imagen / cuadros de video"] --> OJ["Ojos<br/>Qwen3-VL-2B"]
+    AUD["Audio / pista del video"] --> OI["Oído<br/>Qwen3-ASR o Whisper"]
+    OJ -->|descripción| S2["Servidor NAI<br/>guardián + memoria + principal"]
+    OI -->|transcripción| S2
+```
+
+La voz para hablar con NAI entra y sale **por fuera** del servidor: el oído convierte el audio en texto antes de entrar y la voz lee la respuesta al salir. La memoria, el guardián y la identidad no cambian. Lo que se guarda es el texto transcrito, no el audio.
 
 | Pieza | Qué hay | Qué falta |
 |---|---|---|
@@ -178,6 +191,7 @@ Hoy este proceso se corre a mano (`python3 tools/nai/nai_reentrenar.py todo …`
 |---|---|---|
 | **Sin flags** | Un modelo (principal + motor de memoria) | 0.4 GB (0.5B) a 2 GB (3B) |
 | **Mínima con voz** | Qwen3-1.7B + Qwen3-0.6B + Qwen3-Embedding-0.6B + Whisper small + `say` | ~2.1 GB |
+| **Con sentidos** | Qwen3-VL-2B (principal que ve) + Qwen3-0.6B + Qwen3-ASR-0.6B | ~3.9 GB |
 | **Completa** | Qwen3-4B + Qwen3-0.6B + Qwen3-Embedding-0.6B + Whisper turbo + OuteTTS 0.6B | ~4.3 GB; el especialista en código (+1 GB) se carga solo cuando hace falta |
 
 Más el KV de cada modelo. Arranca con `-fitt 2048` para dejar margen al sistema. En 8 GB, la configuración completa queda justa: conviene empezar por la mínima y subir midiendo.

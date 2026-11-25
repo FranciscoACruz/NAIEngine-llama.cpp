@@ -1,5 +1,6 @@
 // [NAI] Lector de documentos. Ver nai-lector.h.
 #include "nai-lector.h"
+#include "nai-sentidos.h"
 
 #include "http.h"
 #include "subproc.h"
@@ -214,7 +215,7 @@ static std::string html_a_texto_bruto(const std::string & html0) {
 }
 
 // Ejecuta un convertidor externo sin shell (argumentos separados) y devuelve su salida.
-static bool ejecutar(const std::vector<std::string> & args, std::string & salida, std::string & error) {
+bool ejecutar(const std::vector<std::string> & args, std::string & salida, std::string & error) {
     if (!common_subproc::is_supported()) { error = "este binario se compiló sin soporte de subprocesos (LLAMA_SUBPROCESS)"; return false; }
     common_subproc p;
     if (!p.create(args, subprocess_option_search_user_path | subprocess_option_inherit_environment | subprocess_option_no_window)) {
@@ -236,7 +237,7 @@ static bool ejecutar(const std::vector<std::string> & args, std::string & salida
     return true;
 }
 
-static std::string ruta_temporal(const std::string & ext) {
+std::string ruta_temporal(const std::string & ext) {
     std::random_device rd;
     char nombre[64];
     snprintf(nombre, sizeof(nombre), "nai-lector-%08x%08x.%s", rd(), rd(), ext.c_str());
@@ -297,6 +298,16 @@ resultado leer_bytes(const std::string & nombre, const std::string & contenido, 
         else                                           ext = "txt";
     }
     if (contenido.size() >= 5 && contenido.compare(0, 5, "%PDF-") == 0) ext = "pdf";
+    // imágenes, audio y video: los sentidos los convierten en texto; los bytes se conservan por si el
+    // modelo principal ve u oye por sí mismo
+    const std::string medio = nai_sentidos::tipo_medio(nombre, content_type, contenido);
+    if (!medio.empty() && ext != "pdf") {
+        r.tipo  = medio;
+        r.mime  = nai_sentidos::mime_de(medio, contenido);
+        r.medio = contenido;
+        r.ok    = nai_sentidos::describir(medio, contenido, r.mime, "", r.texto, r.error);
+        return r;
+    }
     if (ext == "pdf" || ext == "docx" || ext == "doc" || ext == "rtf" || ext == "odt" || ext == "pages") {
         return convertir_externo(contenido, ext);
     }
@@ -403,7 +414,7 @@ resultado leer_url(const std::string & url0, bool permitir_local, size_t max_byt
             cli.set_read_timeout(30, 0);
             std::string cuerpo;
             bool excedido = false;
-            httplib::Headers hdr = { { "User-Agent", "NAI-lector/1.0" }, { "Accept", "text/html,text/plain,application/pdf,*/*;q=0.5" } };
+            httplib::Headers hdr = { { "User-Agent", "NAI-lector/1.0" }, { "Accept", "text/html,text/plain,application/pdf,image/*,audio/*,video/*,*/*;q=0.5" } };
             auto res = cli.Get(partes.path, hdr, [&](const char * d, size_t n) {
                 if (cuerpo.size() + n > max_bytes) { excedido = true; return false; }
                 cuerpo.append(d, n);
