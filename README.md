@@ -342,6 +342,8 @@ Configuración recomendada para una Mac de 8 GB: el principal ve por sí mismo y
 ./build/bin/llama-server -m Qwen3-ASR-0.6B-Q8_0.gguf --mmproj mmproj-Qwen3-ASR-0.6B-Q8_0.gguf --port 8082 -fitt 1024
 ```
 
+Atajo: `bash tools/nai/nai-arrancar.sh` hace lo mismo con un solo comando (oído en segundo plano, NAI al frente, memoria para la interfaz web; Ctrl+C cierra los dos). Opciones: `--whisper ARCHIVO` para oír con whisper-server, `--sin-oido`, `--texto` para el modelo de solo texto, y variables como `NAI_PUERTO=8090` (`--help` las lista).
+
 - **Ojos.** Si el principal ya ve (`--mmproj`), los ojos son el mismo servidor; no hace falta `--nai-ojos`. Con un principal que solo lee texto, `--nai-ojos http://127.0.0.1:8083` apunta a otro `llama-server` con un modelo de visión.
 - **Oído.** `--nai-oido` acepta un `llama-server` con un modelo de audio (Qwen3-ASR, Voxtral, Ultravox) o un `whisper-server` de whisper.cpp con la URL terminada en `/inference`. El audio en llama.cpp aún es experimental; whisper es el respaldo.
 - **ffmpeg** (`brew install ffmpeg`) hace falta para video y para audio que no sea WAV, MP3 o FLAC.
