@@ -30,21 +30,32 @@ NAI es una extensión de [llama.cpp](https://github.com/ggml-org/llama.cpp) crea
 
 ## 1. Inicio rápido
 
-En macOS con Apple Silicon (en Linux cambia solo el paso de dependencias, ver §2):
+NAI completo en una Mac con Apple Silicon y 8 GB o más (en Linux cambia solo el paso de dependencias, ver §2):
 
 ```console
 xcode-select --install
-brew install cmake git
+brew install cmake git ffmpeg
 git clone https://github.com/FranciscoACruz/NAIEngine-llama.cpp.git
 cd NAIEngine-llama.cpp
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j 4 --target llama-server llama-cli test-nai
+cmake --build build -j 4 --target llama-server test-nai
 ./build/bin/test-nai
-curl -L -o qwen2.5-0.5b-instruct-q4_k_m.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
-./build/bin/llama-server -m qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8080 --nai-sesiones ./sesiones --context-shift --nai-desalojo
 ```
 
-Abre `http://localhost:8080` en el navegador o usa la API (§3.2).
+Descarga los modelos (unos 5 GB, gratis y sin cuenta; lista completa en §2.6) a `~/nai-modelos` y arranca:
+
+```console
+./nai.sh
+```
+
+`./nai.sh` levanta el principal que ve (Qwen3-VL-2B), el oído (Qwen3-ASR), el cerebelo, el hipocampo y la memoria; si falta un modelo, dice cuál. Abre `http://localhost:8080` en el navegador o usa la API (§3.2). Ctrl+C cierra todo.
+
+Para una prueba mínima con un solo modelo chico, sin sentidos ni memoria:
+
+```console
+curl -L -o qwen2.5-0.5b-instruct-q4_k_m.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
+./build/bin/llama-server -m qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8080 --context-shift --nai-desalojo
+```
 
 ---
 
@@ -56,9 +67,10 @@ Abre `http://localhost:8080` en el navegador o usa la API (§3.2).
 |---|---|---|
 | Compilador C++17 | Clang 14, GCC 11, MSVC 2022 | En macOS viene con las Command Line Tools |
 | CMake | 3.14 | `brew install cmake` / `apt install cmake` |
+| ffmpeg | cualquiera | Opcional: para que NAI vea videos y oiga notas de voz que no sean WAV, MP3 o FLAC. `brew install ffmpeg` / `apt install ffmpeg` |
 | Python 3 | 3.9 | Solo para las herramientas de `tools/nai/` y `crear_modelo_prueba.py` (`pip install numpy gguf`) |
-| RAM | 4 GB | Modelo 0.5B Q4 ≈ 0.4 GB; 3B Q4 ≈ 2 GB. Con 8 GB compila con `-j 2` |
-| Disco | ~2 GB | Código + compilación + un modelo pequeño |
+| RAM | 4 GB; 8 GB para NAI completo | Modelo 0.5B Q4 ≈ 0.4 GB; NAI completo (`./nai.sh`, cinco modelos) ≈ 4.5 GB más el contexto. Con 8 GB compila con `-j 2` si se pone lento |
+| Disco | ~2 GB; ~8 GB para NAI completo | Código + compilación + modelos |
 
 El software no está atado a una arquitectura: el mismo código corre en CPU (x86, ARM), Metal (Apple), CUDA (NVIDIA), Vulkan y los demás backends de ggml. Las funciones NAI trabajan sobre los logits y sobre la máscara de atención, que existen en todos los backends.
 
@@ -77,14 +89,16 @@ Para actualizar después: `git pull`.
 
 ```console
 xcode-select --install
-brew install cmake
+brew install cmake ffmpeg
 ```
+
+Si `xcode-select` dice que las herramientas ya están instaladas, no es un error. Si `brew` no existe, instálalo desde [brew.sh](https://brew.sh) y corre las dos líneas que indica al final.
 
 **Ubuntu / Debian:**
 
 ```console
 sudo apt update
-sudo apt install -y build-essential cmake git python3-pip
+sudo apt install -y build-essential cmake git python3-pip ffmpeg
 ```
 
 **Windows:** instala Visual Studio 2022 con "Desarrollo para escritorio con C++" y CMake, y usa la "Developer PowerShell".
@@ -116,11 +130,38 @@ Los binarios quedan en `build/bin/`. En Windows, en `build\bin\Release\`.
 ./build/bin/test-nai
 ```
 
-No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, triaje, SipHash-2-4 (vectores oficiales), la tabla de sesiones, las claves y el troceo de la memoria, la lectura de HTML, el diccionario de tokens de la memoria (ida y vuelta y rechazo de datos dañados) y ChaCha20-Poly1305 (vector oficial del RFC 8439). También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
+No necesita modelo y debe terminar sin fallos. Cubre entropía, sorpresa, `exp_rapido`, log-sum-exp con NaN, predicciones pendientes, mapa de masa, ventana de desalojo, triaje, SipHash-2-4 (vectores oficiales), la tabla de sesiones, las claves y el troceo de la memoria, la lectura de HTML, el diccionario de tokens de la memoria (ida y vuelta y rechazo de datos dañados), ChaCha20-Poly1305 (vector oficial del RFC 8439), SHA-256/HMAC/PBKDF2, el guardián y los detectores (manipulación, código, comandos, datos privados), las cuentas con login, la firma de significado, el anti-bucle y el reconocimiento de imágenes, audio y video de los sentidos. También corre con `ctest --test-dir build -R test-nai --output-on-failure`.
 
-### 2.6 Descargar un modelo
+### 2.6 Descargar los modelos
 
-NAI usa modelos GGUF, igual que llama.cpp. Para empezar, Qwen2.5 Instruct en Q4_K_M:
+NAI usa modelos GGUF, igual que llama.cpp. Son de pesos abiertos: se descargan gratis, sin cuenta, y corren en tu equipo sin internet.
+
+**NAI completo** (lo que arranca `./nai.sh`), en `~/nai-modelos`:
+
+| Papel | Archivo | Tamaño |
+|---|---|---|
+| Principal que ve | `Qwen3-VL-2B-Instruct-Q8_0.gguf` + `mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf` | 1.8 GB + 445 MB |
+| Oído | `Qwen3-ASR-0.6B-Q8_0.gguf` + `mmproj-Qwen3-ASR-0.6B-Q8_0.gguf` | 805 MB + 214 MB |
+| Cerebelo | `Qwen3-0.6B-Q8_0.gguf` | 640 MB |
+| Hipocampo | `Qwen3-Embedding-0.6B-Q8_0.gguf` | 640 MB |
+| Solo texto (opcional, `./nai.sh --texto`) | `Qwen3-1.7B-Q8_0.gguf` | 1.8 GB |
+
+```console
+mkdir -p ~/nai-modelos
+cd ~/nai-modelos
+curl -L -C - -O https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3-VL-2B-Instruct-Q8_0.gguf
+curl -L -C - -O https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf
+curl -L -C - -O https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf
+curl -L -C - -O https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf
+curl -L -C - -O https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
+curl -L -C - -O https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf
+ls -lh
+cd -
+```
+
+`-C -` continúa una descarga cortada en lugar de empezar de cero: si se interrumpe, vuelve a correr la misma línea. Al final, revisa con `ls -lh` que ningún archivo pese mucho menos de lo esperado (`ls` muestra MiB, un poco menos que los MB de la tabla); un archivo incompleto da errores como `failed to seek for tensor`.
+
+**Un solo modelo** para pruebas rápidas, Qwen2.5 Instruct en Q4_K_M:
 
 ```console
 curl -L -o qwen2.5-0.5b-instruct-q4_k_m.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
@@ -136,11 +177,29 @@ python3 tests/nai-manual/crear_modelo_prueba.py /tmp/nai-prueba.gguf
 
 Con `--capas 24 --embd 896 --cabezas 14 --cabezas-kv 2 --ff 4864 --f16 --vocab models/ggml-vocab-qwen2.gguf` crea un modelo aleatorio con la forma exacta de Qwen2.5-0.5B, útil para medir costos reales por token.
 
+### 2.7 Llevar NAI a otro equipo
+
+El código se baja con `git clone` y se compila en cada equipo (§2.3 y §2.4); los binarios de `build/` no se copian entre equipos. Lo demás se copia tal cual:
+
+| Qué | Dónde | Nota |
+|---|---|---|
+| Modelos | `~/nai-modelos` | O vuelve a descargarlos (§2.6) |
+| Memoria, biblioteca, sesiones y cuentas | `~/nai-datos` | Incluye `.nai-clave`: sin ella, lo cifrado no se puede leer. Cópiala con la carpeta y no la subas a git |
+| Id de la sesión de la interfaz web | `~/.nai-sesion` | Para que la interfaz web del equipo nuevo siga la misma conversación |
+
+```console
+rsync -a ~/nai-modelos ~/nai-datos ~/.nai-sesion usuario@equipo-nuevo:~/
+```
+
+Mientras NAI corre en un equipo, no corras otro NAI sobre la misma copia de `~/nai-datos`: cada equipo debe tener la suya.
+
 ---
 
 ## 3. Ejecución
 
 ### 3.1 Servidor
+
+La forma recomendada es `./nai.sh` (§3.9): arranca todas las partes con los valores correctos. Para arrancar el servidor a mano con un solo modelo:
 
 ```console
 ./build/bin/llama-server -m qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8080 -c 8192 --context-shift --nai-desalojo --nai-sesiones ./sesiones --nai-sesion-ttl 86400
@@ -844,6 +903,7 @@ petición HTTP ──► server-context.cpp
 | `tools/server/server.cpp` | Enrutamiento al especialista (`--nai-especialista`), con el proxy del modo router |
 | `tools/nai/probar-nai.sh` | Prueba completa de punta a punta: compilar, medir, conversar, aprender |
 | `tools/nai/nai-voz.sh` | Oído y voz: sox + whisper.cpp + `say` |
+| `nai.sh`, `tools/nai/nai-arrancar.sh` | Arranque de NAI completo: revisa modelos y puertos, levanta el oído y el principal, los vuelve a levantar si se caen y cierra todo con Ctrl+C |
 | `tools/server/server-context.cpp` | Desalojo, gravedad, sesiones y traza en el servidor |
 | `tools/server/server-task.h`, `server-queue.cpp` | Campo `nai_session` de la petición |
 | `tools/cli/cli-context.cpp/.h` | Triaje y autopista en el CLI |
@@ -936,6 +996,7 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 - **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo. Los HTTP 500 del parser de chat ya no cortan la plática en NAI (la salida mal formada se entrega como texto), pero el oficial trae más correcciones.
 - **Naturaleza indicada al aprender:** un campo `"naturaleza"` en `/nai/aprender` y una tercera columna en `nai-fuentes.txt`, para que el material propio (tradiciones de sabiduría, cosmogonías) entre como sabiduría sin depender del guardián.
 - **Medir los modelos del cerebro con modelos reales:** precisión del cerebelo (región, naturaleza, reparto al especialista), umbral del hipocampo con Qwen3-Embedding y velocidad con `-md` en la Mac; ajustar los valores por defecto con esos números.
+- **Medir los sentidos con modelos reales:** calidad de las descripciones de Qwen3-VL-2B (fotos, texto impreso, manuscrito), de las transcripciones de Qwen3-ASR frente a Whisper, y el tiempo por imagen, audio y video en la Mac.
 - **Reentrenamiento automático:** correr `nai_reentrenar.py todo` cuando la biblioteca acumule suficiente material nuevo, y aceptar el adaptador solo si pasa el control de olvido.
 - **Recargar el adaptador sin reiniciar:** un endpoint que cargue un `.gguf` LoRA nuevo en caliente; hoy se reinicia el servidor con `--lora`.
 - **Especialista con memoria:** hoy el especialista recibe la conversación del cliente pero no los recuerdos de NAI, y su respuesta no se guarda en la memoria. Pasarle el contexto preparado y registrar su turno.
@@ -947,6 +1008,12 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 
 | Síntoma | Causa | Solución |
 |---|---|---|
+| `zsh: command not found: cmake` | Equipo nuevo sin CMake | `brew install cmake ffmpeg` y luego `cmake -B build -DCMAKE_BUILD_TYPE=Release` antes de compilar (§2.3) |
+| `./nai.sh: No está compilado` | Falta compilar en este equipo | `cmake -B build -DCMAKE_BUILD_TYPE=Release` y `cmake --build build -j4 --target llama-server` |
+| `failed to seek for tensor …` / `failed to load model` | Modelo o proyector descargado a medias | Compara su tamaño con §2.6 y termina la descarga con `curl -L -C - -O URL` |
+| `./nai.sh` dice que el oído falló 3 veces al arrancar | El oído no puede cargar su modelo (archivo incompleto, falta de memoria) | Las líneas de error que muestra lo dicen; el registro completo está en `~/nai-datos/oido.log`. Mientras tanto: `./nai.sh --sin-oido` |
+| `couldn't bind HTTP server socket … port: 8080` | Otro programa (o un NAI anterior) ya usa el puerto | `lsof -nP -iTCP:8080 -sTCP:LISTEN` para ver cuál; si es un `llama-server` viejo, ciérralo con `kill PID`; si no, `NAI_PUERTO=8090 ./nai.sh` |
+| `[NAI] el cerebelo tiene otro vocabulario` | Principal y cerebelo no comparten vocabulario | `./nai.sh --sin-cerebelo` |
 | `zsh: command not found: #` al pegar comandos | zsh no acepta comentarios interactivos | `setopt interactive_comments` o pega los comandos sin las líneas `#` |
 | `zsh: event not found` | `!` en el texto pegado | `setopt no_bang_hist` |
 | La compilación se congela o el equipo se pone lento | Falta de RAM | `cmake --build build -j 2` |
@@ -977,6 +1044,7 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 9. **Planificador:** solo en simulación; falta implementarlo en el servidor.
 10. **Reentrenamiento:** necesita Apple Silicon (MLX) para entrenar; en Linux/CUDA habría que cambiar el paso `entrenar` por PEFT. La calidad depende de las fuentes: con fuentes pobres o generales, el adaptador aprende poco. Probado de punta a punta solo con un modelo de prueba; la medición con Qwen real está pendiente.
 11. **Masa semántica sin $\|W_K x\|_2$:** el factor de la fórmula original del autor sigue pendiente (§5.1).
+12. **Sentidos:** probados de punta a punta con un servidor de prueba; la calidad y la velocidad con Qwen3-VL-2B y Qwen3-ASR en la Mac están por medir. Un modelo de visión de 2B se equivoca con detalles finos, letra manuscrita y gráficas complejas; el audio en llama.cpp aún es experimental (whisper es el respaldo, `./nai.sh --whisper`). De un video solo se ven `--nai-cuadros` cuadros (6 por defecto). Si el principal ve, NAI puede describirse a sí mismo para la biblioteca, salvo con `--nai-login`.
 
 ---
 

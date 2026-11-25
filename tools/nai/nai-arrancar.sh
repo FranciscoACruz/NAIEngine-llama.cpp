@@ -65,7 +65,9 @@ esperar() {   # esperar URL PID nombre
   return 1
 }
 
-[ -x "$SERVIDOR" ] || falta "No está compilado: corre primero  cmake --build build -j4 --target llama-server  en $RAIZ"
+[ -x "$SERVIDOR" ] || falta "No está compilado en este equipo. Desde $RAIZ corre:
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j4 --target llama-server"
 [ -f "$PRINCIPAL" ] || falta "No encuentro el modelo principal: $PRINCIPAL"
 [ -z "$PROYECTOR" ] || [ -f "$PROYECTOR" ] || falta "No encuentro el proyector de visión: $PROYECTOR"
 puerto_ocupado "$PUERTO" && falta "El puerto $PUERTO está ocupado (revisa con: lsof -nP -iTCP:$PUERTO -sTCP:LISTEN). Usa otro con NAI_PUERTO=8090"
@@ -93,12 +95,20 @@ guardian() {
     exit 0
   }
   trap terminar TERM
+  fallas=0
   while :; do
+    inicio=$(date +%s)
     "$@" >> "$LOG_OIDO" 2>&1 &
     hijo=$!
     wait "$hijo"
     rc=$?
     [ "$rc" = 0 ] && exit 0   # se cerró en orden (Ctrl+C): no es una caída
+    if [ $(( $(date +%s) - inicio )) -lt 60 ]; then fallas=$((fallas + 1)); else fallas=0; fi
+    if [ "$fallas" -ge 3 ]; then   # se cae al arrancar: no es una caída, es un error; no insistir
+      echo "✗ El oído falló 3 veces al arrancar (código $rc). Últimas líneas de $LOG_OIDO:" | tee -a "$LOG_OIDO"
+      grep -aE " E |[Ee]rror|failed|No such" "$LOG_OIDO" | tail -6
+      exit 1
+    fi
     echo "! El oído se cerró (código $rc); se vuelve a levantar en 3 s" | tee -a "$LOG_OIDO"
     sleep 3
   done
@@ -137,9 +147,9 @@ if [ "$SIN_OIDO" = 0 ]; then
     guardian "$SERVIDOR" -m "$OIDO_MODELO" --mmproj "$OIDO_PROYECTOR" --port "$PUERTO_OIDO" -fitt 1024 -c 4096 &
     PID_OIDO=$!
     URL_OIDO="http://127.0.0.1:$PUERTO_OIDO"
-    esperar "$URL_OIDO" "$PID_OIDO" || falta "El oído no arrancó; revisa las últimas líneas de $LOG_OIDO"
+    esperar "$URL_OIDO" "$PID_OIDO" || falta "El oído no pudo arrancar (detalle arriba). Puedes arrancar sin él con: ./nai.sh --sin-oido"
   fi
-  if grep -q "se vuelve a levantar" "$LOG_OIDO"; then falta "El oído se cae al arrancar; revisa $LOG_OIDO"; fi
+  kill -0 "$PID_OIDO" 2>/dev/null || falta "El oído no pudo arrancar (detalle arriba). Puedes arrancar sin él con: ./nai.sh --sin-oido"
   echo "· Oído listo ($URL_OIDO). Su registro: $LOG_OIDO"
 fi
 
