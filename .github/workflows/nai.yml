@@ -4,7 +4,7 @@ name: NAI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, sincronizar ]   # sincronizar: rama para probar una actualización del oficial antes de main
   pull_request:
   workflow_dispatch:
 

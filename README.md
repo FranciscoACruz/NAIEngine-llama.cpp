@@ -978,22 +978,36 @@ El modelo aleatorio con `-c 256` llena el contexto en segundos, así que sirve p
 
 ### 9.4 Sincronizar con el llama.cpp oficial
 
-El fork se basa en una versión anterior de llama.cpp. Para traer las mejoras del oficial (por ejemplo, el parser de chat que evita los HTTP 500 con UTF-8 inválido):
+**Última sincronización:** oficial `9c003a9` (2026-11-25), sobre la base anterior `fc6545d` (2026-08-07). Ganancia medida: con 2 048 tokens de contexto, la generación en CPU pasó de 9.5 a 16.1 tok/s, igual que el oficial (`docs/BENCHMARKS.md`, Resultado 5).
 
-```console
-git remote add upstream https://github.com/ggml-org/llama.cpp.git
-git fetch upstream
-git checkout -b sync-upstream
-git merge upstream/master
-```
+Cómo se hace (para la próxima vez):
 
-Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `common/common.h`, `common/sampling.cpp/.h`, `src/llama-context.cpp/.h`, `src/llama-kv-cache.cpp/.h`, `src/llama-model.cpp`, `src/CMakeLists.txt`, `tests/CMakeLists.txt`, `tools/server/server-context.cpp`, `tools/server/server-task.h`, `tools/server/server-queue.cpp`, `tools/cli/cli-context.cpp/.h`. Resuelve conservando el código oficial y reaplicando cada bloque `[NAI]`; luego compila, corre `test-nai` y `nai_bench.py --server-oficial` para confirmar que la velocidad sigue igual al oficial.
+1. **Encontrar la base exacta del fork:** el commit oficial con menos archivos distintos al fork (`git diff --name-only COMMIT naimain | wc -l`). Con eso, el parche NAI es `git diff BASE naimain`.
+2. **Fusión de 3 vías:** una rama en BASE con el árbol de NAI encima, y `git merge` del oficial nuevo.
+3. **Conflictos:** conservar el código oficial y volver a poner cada bloque `[NAI]`, adaptado a las APIs nuevas. Donde NAI había reescrito funciones enteras del oficial sin necesidad, se toma la versión oficial y se reaplica solo lo marcado con `[NAI]`.
+4. **Verificar:** compilar todo, `test-nai`, la matriz (`tools/nai/matriz_pruebas.py`), la prueba de sentidos, la conversación larga, reanudar sesiones y `llama-bench` contra el oficial.
+
+Lo que cambió en la API del oficial y hubo que adaptar en esta sincronización:
+
+| Del lado oficial | Cómo quedó NAI |
+|---|---|
+| `nlohmann::json` → `common_json` propio | El código NAI del servidor usa la misma interfaz; insertar al principio de un arreglo se hace armando uno nuevo |
+| Lotes `llama_batch` → `llama_batch_ext` / `common_batch` | La traza del planificador cuenta prefill y generación por estado de los slots |
+| Estadísticas del slot (`n_decoded`, `t_start_generation`…) → `slot.stats` | Traza y anti-bucle usan `stats.n_gen`, `stats.t_start`, `stats.t_prompt_last` |
+| Texto generado `std::string` → `common_chat_input` (texto + token por byte) | El anti-bucle recorta texto y tokens juntos |
+| La dirección del servidor pasó a ser una lista (`hostnames`) | Los sentidos se llaman a sí mismos por la primera |
+| Máscara de atención con filas compactadas | La gravedad solo se aplica sin compactar (las columnas son celdas del caché) |
+| Muestreo con `rng` propio y rechazo especulativo | La autopista se reaplicó sobre el muestreo oficial, sin cambiar sus firmas |
+| `server.cpp` dividido en funciones por papel (instancia, router) | Rutas `/nai/*` en el registro común; especialista solo en la instancia |
+| Opciones quitadas: `--mlock`, `--mmap`/`--no-mmap`, `--direct-io`, `--defrag-thold` | Ya no existen; `--load-mode` las sustituye |
+
+Cambios del fork que **no** se conservaron porque el oficial ya los resolvió mejor: el manejo de JSON inválido como error 400 (el oficial lo hace con `common_json_error`) y la reescritura de `state_get_data`/`state_set_data` (NAI usa las funciones por secuencia del oficial). Restaurar una sesión ahora toma 0.9 s en lugar de 2.4 s.
 
 ### 9.5 Ideas de mejora abiertas
 
 - **Masa con $\|W_K x\|_2$** (§5.1): leer la norma de la K guardada en el caché (RoPE conserva la norma) y combinarla con la sorpresa.
 - **Planificador en el servidor:** implementar lo validado en `docs/PLANIFICADOR.md`, empezando por la admisión (Schwarzschild) y la hibernación reutilizando el código de sesiones.
-- **Sincronizar con el llama.cpp oficial** (§9.4): el pendiente de mayor riesgo. Los HTTP 500 del parser de chat ya no cortan la plática en NAI (la salida mal formada se entrega como texto), pero el oficial trae más correcciones.
+- **Sincronizar con el llama.cpp oficial cada uno o dos meses** (§9.4): hecho el 2026-11-25; recuperó el 70 % de velocidad con contexto largo. Repetirlo trae las mejoras nuevas sin acumular distancia. Los HTTP 500 del parser de chat ya no cortan la plática en NAI (la salida mal formada se entrega como texto), pero el oficial trae más correcciones.
 - **Naturaleza indicada al aprender:** un campo `"naturaleza"` en `/nai/aprender` y una tercera columna en `nai-fuentes.txt`, para que el material propio (tradiciones de sabiduría, cosmogonías) entre como sabiduría sin depender del guardián.
 - **Medir los modelos del cerebro con modelos reales:** precisión del cerebelo (región, naturaleza, reparto al especialista), umbral del hipocampo con Qwen3-Embedding y velocidad con `-md` en la Mac; ajustar los valores por defecto con esos números.
 - **Medir los sentidos con modelos reales:** calidad de las descripciones de Qwen3-VL-2B (fotos, texto impreso, manuscrito), de las transcripciones de Qwen3-ASR frente a Whisper, y el tiempo por imagen, audio y video en la Mac.
@@ -1038,7 +1052,7 @@ Archivos donde se esperan conflictos (todos llevan `[NAI]`): `common/arg.cpp`, `
 3. **Autopista:** se desactiva sola con gramáticas, JSON schema, `logit_bias` o penalizaciones.
 4. **Borrador de auto-especulación:** duplica ≈ $K/L$ de los pesos en memoria y fue más lento en M1.
 5. **Sesiones:** no cubren multimodal ni especulación. El cifrado es opcional (`--nai-cifrado`).
-6. **Base del fork:** anterior al llama.cpp oficial actual (parser de chat con errores en UTF-8 inválido).
+6. **Base del fork:** sincronizada con el llama.cpp oficial `9c003a9` (2026-11-25). El oficial avanza a diario: conviene repetir la sincronización cada uno o dos meses (§9.4).
 7. **Login:** no aplica en modo router (varios modelos). Detrás de un proxy, el bloqueo por IP ve la dirección del proxy (el bloqueo por usuario sigue). Con `--nai-login`, `/completion`, `/v1/responses` y `/v1/messages` quedan solo para el dueño y no usan la memoria; la memoria vive en `/v1/chat/completions`.
 8. **Memoria reconstructiva:** cada recuerdo nuevo cuesta un paso del modelo por token (clasificar y codificar); en un M1 con 0.5B, un documento de 10 páginas tarda alrededor de un minuto en aprenderse. Los archivos `.mem` solo sirven con el mismo modelo, las mismas regiones y el mismo backend. La búsqueda por claves no entiende sinónimos ("dinero" no encuentra "ahorro"); el respaldo es la región. Calidad de clasificación, ideas y pistas pendiente de medir con Qwen real (`nai_memoria`).
 9. **Planificador:** solo en simulación; falta implementarlo en el servidor.

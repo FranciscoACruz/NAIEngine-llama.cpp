@@ -53,7 +53,10 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -63,6 +66,8 @@ add_library(${TARGET}
     chat-diff-analyzer.cpp
     chat-peg-parser.cpp
     chat-peg-parser.h
+    chat-tts-norm.cpp
+    chat-tts-norm.h
     chat.cpp
     chat.h
     common.cpp
@@ -75,12 +80,18 @@ add_library(${TARGET}
     download.h
     fit.cpp
     fit.h
+    file-lock.cpp
+    file-lock.h
     hf-cache.cpp
     hf-cache.h
     http.h
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
+    json-schema.cpp
+    json-schema.h
+    json.cpp
+    json.h
     llguidance.cpp
     log.cpp
     log.h
@@ -130,12 +141,13 @@ add_library(${TARGET}
     )
 
 set_target_properties(${TARGET} PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(${TARGET} PUBLIC .)
+target_link_libraries     (${TARGET} PUBLIC vendor::nlohmann vendor::sheredom)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (LLAMA_SUBPROCESS)
@@ -168,7 +180,7 @@ if (LLAMA_LLGUIDANCE)
         CONFIGURE_COMMAND ""
         BUILD_COMMAND cargo build --release --package llguidance
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
+        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_SRC}/parser/llguidance.h
         UPDATE_COMMAND ""
     )
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_LLGUIDANCE)
@@ -177,7 +189,7 @@ if (LLAMA_LLGUIDANCE)
     set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
     add_dependencies(llguidance llguidance_ext)
 
-    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
+    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_SRC}/parser)
     target_link_libraries(${TARGET} PRIVATE llguidance)
     if (WIN32)
         target_link_libraries(${TARGET} PRIVATE ws2_32 userenv ntdll bcrypt)
@@ -185,3 +197,8 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+if (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # AIX's flock() function comes from libbsd.a
+    target_link_libraries(${TARGET} PRIVATE -lbsd)
+endif()

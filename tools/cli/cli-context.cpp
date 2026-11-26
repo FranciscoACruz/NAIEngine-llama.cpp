@@ -7,8 +7,7 @@
 #include "log.h"
 #include "console.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <algorithm>
 #include <cctype>
@@ -17,7 +16,7 @@
 #include <map>
 #include <set>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 struct cli_context_impl {
     json messages      = json::array();
@@ -73,7 +72,7 @@ static std::string format_error_message(const json & err) {
 }
 
 static std::string format_error_message(const std::string & err) {
-    json parsed = json::parse(err, nullptr, false);
+    json parsed = json::parse_no_throw(err);
     if (!parsed.is_discarded()) {
         return format_error_message(parsed);
     }
@@ -155,7 +154,7 @@ bool cli_context::init() {
             if (!list_and_ask_models()) {
                 return false;
             }
-        } catch (const json::parse_error & e) {
+        } catch (const common_json_error & e) {
             ui::show_error(e.what());
             ui::show_message("This might be caused by an incorrect server-base endpoint URL");
             return false;
@@ -296,7 +295,7 @@ bool cli_context::list_and_ask_models() {
         ui::user_turn user_turn;
         selection = user_turn.read_input(false, "Select model by number: ");
         if (selection.empty()) {
-            continue;
+            return false;
         }
         try {
             size_t idx = std::stoul(selection);
@@ -381,8 +380,8 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
     bool stream_error = false;
     ui::assistant_turn a;
 
-    std::string err = client.post_sse("/v1/chat/completions", body.dump(), should_stop, [&](const std::string & payload) {
-        json chunk = json::parse(payload, nullptr, false);
+    std::string err = client.post_sse("/v1/chat/completions", body.dump_safe(), should_stop, [&](const std::string & payload) {
+        json chunk = json::parse_no_throw(payload);
         if (chunk.is_discarded()) {
             return;
         }
@@ -514,7 +513,13 @@ int cli_context::run() {
             break;
         }
 
-        if (!buffer.empty() && buffer.back() == '\n') {
+        // a submitted line always ends with a newline, an empty read is EOF
+        if (buffer.empty()) {
+            break;
+        }
+
+        // remove trailing newline
+        if (buffer.back() == '\n') {
             buffer.pop_back();
         }
 

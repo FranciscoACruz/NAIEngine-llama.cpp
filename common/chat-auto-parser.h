@@ -4,7 +4,7 @@
 #include "common.h"
 #include "jinja/caps.h"
 #include "peg-parser.h"
-#include "nlohmann/json.hpp"
+#include "json.h"
 
 #include <chrono>
 #include <optional>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 class common_chat_peg_builder;
 
@@ -71,6 +71,7 @@ struct generation_params {
     bool                                  is_inference  = true;
     bool                                  add_inference = false;
     bool                                  mark_input    = true;  // whether to mark input strings in the jinja context
+    common_peg_tokens                     specials;
 
     bool has_continuation() const {
         return continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !continue_msg.empty();
